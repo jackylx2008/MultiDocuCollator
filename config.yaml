@@ -1,0 +1,8 @@
+app:
+  log_level: ${LOG_LEVEL:-INFO}
+
+flows:
+  build_archive:
+    data_root: ${CLOUDSTATION_ROOT}/国会二期/02 酒店需求工作联系单
+    json_name: ${ARCHIVE_JSON_NAME:-酒店需求工作联系单数据.json}
+    html_name: ${ARCHIVE_HTML_NAME:-酒店需求工作联系单汇总.html}

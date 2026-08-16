@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.conda/
+.vscode/
+.DS_Store
+common.env
+*.env
+logs/
+output/
+.pytest_cache/
+.coverage
