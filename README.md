@@ -62,6 +62,29 @@ CLOUDSTATION_ROOT_LINUX=~/CloudStation
 `--data-root` 可进一步覆盖工作流资料目录。公开的 `config.yaml` 不保存用户名、
 盘符之外的本机私有绝对路径。
 
+## 快速使用
+
+首次使用按以下顺序执行：
+
+```bash
+# 1. 激活本机虚拟环境
+source .venv/bin/activate
+
+# 2. 扫描资料并生成或刷新 JSON/HTML
+python build_archive.py
+
+# 3. 启动支持打开目录和新增联系单的本地页面
+python serve_summary.py
+```
+
+Windows PowerShell 将第一条命令替换为：
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+浏览器会打开 `127.0.0.1` 本地地址。完成使用后回到终端按 `Ctrl+C` 停止服务。
+
 ## 生成成果
 
 ```bash
@@ -114,6 +137,37 @@ Windows 和 macOS 的不同群晖根目录下使用。直接双击静态 HTML �
 新增功能必须通过 `serve_summary.py` 使用；直接双击静态 HTML 时不会尝试写入。
 macOS 或 Windows 需要安装 Microsoft Word，并在首次使用时允许系统自动化权限。
 
+新建结果的命名规则为：
+
+```text
+专业-编号-YYYY-MM-DD_主题/
+├── 需求工作联系单（专业-编号）_主题.docx
+└── 需求工作联系单（专业-编号）_主题.pdf
+```
+
+模板必须命名为 `需求工作联系单模板.docx`，并与 JSON、HTML 保持同一目录层级。
+当前正式模板来自最新且无内嵌旧图片的“消防水-004”。如以后替换模板，应保持
+“资料编号、日 期、致(单位)、事由、内容、备注”等定位文字及正文表格结构不变，
+随后先用临时记录验证 DOCX 与 PDF 版式。
+
+## VS Code / Code Runner
+
+建议在 VS Code 中选择项目自己的 Python 解释器：
+
+- macOS/Linux：`.venv/bin/python`
+- Windows：`.venv\Scripts\python.exe`
+
+Code Runner 必须以项目根目录作为工作目录，否则可能找不到 `config.yaml`、
+`logging_config.py` 或 `src`。也可以直接在 VS Code 集成终端运行
+`python build_archive.py` 或 `python serve_summary.py`，便于查看完整错误信息。
+
+如果点击“保存”后 Word 导出失败：
+
+- macOS：在“系统设置 → 隐私与安全性 → 自动化”中允许终端或 VS Code 控制
+  Microsoft Word。
+- Windows：确认已安装桌面版 Microsoft Word，并避免用其他程序占用目标 DOCX。
+- 不要直接双击 HTML；新增保存接口只在 `serve_summary.py` 启动期间可用。
+
 ## 独立校验
 
 ```bash
@@ -129,7 +183,7 @@ python validate_archive.py --data-root "/path/to/02 酒店需求工作联系单"
 
 ```bash
 python -m unittest discover -s tests -v
-python -m compileall -q build_archive.py validate_archive.py logging_config.py src tests
+python -m compileall -q build_archive.py serve_summary.py validate_archive.py logging_config.py src tests
 ```
 
 测试全部使用临时目录和自建最小 DOCX，不接触真实业务资料。
@@ -164,10 +218,10 @@ git push origin main
 ```text
 build_archive.py                 生成 JSON 和 HTML 的独立入口
 validate_archive.py              独立校验入口
-serve_summary.py                 本地汇总及跨平台目录打开入口
+serve_summary.py                 本地汇总、目录打开及新增联系单入口
 logging_config.py                统一控制台及滚动文件日志
-src/multidocu_collator/modules/  DOCX、扫描、存储、HTML、校验能力
-src/multidocu_collator/flows/    工作流编排
+src/multidocu_collator/modules/  DOCX 解析/生成、Word PDF、扫描、HTML、校验
+src/multidocu_collator/flows/    扫描建库、新增联系单及服务编排
 tests/                           单元和集成测试
 docs/                            架构说明
 logs/                            本地运行日志（不入库）
