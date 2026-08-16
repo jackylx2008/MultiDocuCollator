@@ -24,6 +24,28 @@ HTML 前五列固定为“序号、专业、编号、目录日期、主题”。
 
 ## 配置
 
+先在每台机器的项目根目录分别建立本地虚拟环境。环境目录不进入 Git，也不要在
+Windows、macOS 和 Linux 之间复用。
+
+macOS/Linux：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip --version
+```
+
+Windows PowerShell：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip --version
+```
+
+项目当前没有第三方运行依赖，因此创建环境后无需安装额外软件包。运行和测试时
+优先显式使用 `.venv` 内的解释器。
+
 复制 `common.env.example` 为本机私有的 `common.env`。程序自动按运行系统选择群晖
 同步根目录：
 
@@ -40,13 +62,13 @@ CLOUDSTATION_ROOT_LINUX=~/CloudStation
 ## 生成成果
 
 ```bash
-python3 build_archive.py --data-root "/path/to/02 酒店需求工作联系单"
+python build_archive.py --data-root "/path/to/02 酒店需求工作联系单"
 ```
 
 配置好 `common.env` 后也可以直接运行：
 
 ```bash
-python3 build_archive.py
+python build_archive.py
 ```
 
 默认在资料根目录生成：
@@ -60,7 +82,7 @@ python3 build_archive.py
 ## 独立校验
 
 ```bash
-python3 validate_archive.py --data-root "/path/to/02 酒店需求工作联系单"
+python validate_archive.py --data-root "/path/to/02 酒店需求工作联系单"
 ```
 
 校验数据版本、记录唯一性、路径边界、文件大小和哈希，以及 HTML 的数据版本和
@@ -71,8 +93,8 @@ python3 validate_archive.py --data-root "/path/to/02 酒店需求工作联系单
 项目只使用 Python 标准库，支持 Python 3.10 及以上版本：
 
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q build_archive.py validate_archive.py logging_config.py src tests
+python -m unittest discover -s tests -v
+python -m compileall -q build_archive.py validate_archive.py logging_config.py src tests
 ```
 
 测试全部使用临时目录和自建最小 DOCX，不接触真实业务资料。
