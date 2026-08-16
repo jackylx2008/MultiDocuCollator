@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .constants import DEFAULT_HTML_NAME, DEFAULT_JSON_NAME
+from .constants import DEFAULT_HTML_NAME, DEFAULT_JSON_NAME, DEFAULT_TEMPLATE_NAME
 
 
 ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
@@ -122,4 +122,5 @@ def load_settings(project_root: Path) -> dict[str, Any]:
         "data_root": str(Path(data_root or configured_data_root).expanduser()),
         "json_name": str(flow.get("json_name") or DEFAULT_JSON_NAME),
         "html_name": str(flow.get("html_name") or DEFAULT_HTML_NAME),
+        "template_name": str(flow.get("template_name") or DEFAULT_TEMPLATE_NAME),
     }

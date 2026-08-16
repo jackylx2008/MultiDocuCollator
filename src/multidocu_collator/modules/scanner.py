@@ -119,6 +119,7 @@ def _record(directory: Path, root: Path, match: re.Match[str]) -> dict[str, Any]
         "document_code": expected_code,
         "folder_date": folder_date,
         "subject": subject,
+        "致送单位": word.recipient,
         "需求内容": word.requirement_content,
         "folder_path": relative_posix(directory, root),
         "word_fields": {

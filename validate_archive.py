@@ -47,6 +47,7 @@ def main() -> int:
         data_root=Path(raw_root).expanduser(),
         json_name=settings["json_name"],
         html_name=settings["html_name"],
+        template_name=settings["template_name"],
     )
     try:
         result = run_validation(context, verify_hashes=not args.skip_hashes)

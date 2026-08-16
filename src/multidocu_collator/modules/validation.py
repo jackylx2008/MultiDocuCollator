@@ -52,6 +52,8 @@ def validate_dataset(
         business_keys.add(key)
         if "需求内容" not in record:
             errors.append(f"记录缺少“需求内容”字段: {record_id}")
+        if "致送单位" not in record:
+            errors.append(f"记录缺少“致送单位”字段: {record_id}")
         for item in record.get("files") or []:
             relative = str(item.get("path") or "")
             if relative in file_paths:

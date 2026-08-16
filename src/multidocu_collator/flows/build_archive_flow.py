@@ -23,7 +23,8 @@ def run_build_archive(context: AppContext) -> dict[str, Any]:
     logger.info("扫描资料目录: %s", root)
     previous = load_dataset(context.json_path)
     records, unmatched, ignored = scan_data_root(
-        root, generated_names={context.json_name, context.html_name}
+        root,
+        generated_names={context.json_name, context.html_name, context.template_name},
     )
     logger.info("扫描到 %d 条联系单记录", len(records))
     data, changed, summary = build_dataset(

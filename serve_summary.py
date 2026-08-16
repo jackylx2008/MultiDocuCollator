@@ -3,7 +3,8 @@
 用途：
   在 127.0.0.1 的动态端口打开正式 HTML 汇总。点击“主题”链接时，由服务根据
   当前系统的 CloudStation 根目录定位资料，并使用 Finder、Windows 资源管理器
-  或 Linux 默认文件管理器打开对应目录。
+  或 Linux 默认文件管理器打开对应目录。汇总表末行还可提交新联系单，服务使用
+  同级 DOCX 模板创建文档并通过 Microsoft Word 导出 PDF，随后刷新 JSON/HTML。
 
 配置文件：
   默认读取 config.yaml 和本机私有 common.env，与 build_archive.py 使用同一
@@ -17,7 +18,8 @@
   python serve_summary.py
 
 输出：
-  控制台显示本地访问地址；按 Ctrl+C 停止服务，不修改 JSON 或原始资料。
+  控制台显示本地访问地址；按 Ctrl+C 停止服务。仅在用户点击末行“保存”时创建
+  新资料目录并更新 JSON/HTML，不改动既有资料。
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ def main() -> int:
         data_root=Path(raw_root).expanduser(),
         json_name=settings["json_name"],
         html_name=settings["html_name"],
+        template_name=settings["template_name"],
     )
     try:
         run_summary_server(context, open_browser=not args.no_browser)

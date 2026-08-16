@@ -20,8 +20,15 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from multidocu_collator.modules.docx_parser import parse_docx
+from multidocu_collator.modules.document_generator import generate_contact_docx
 from multidocu_collator.modules.desktop import open_directory, resolve_relative_directory
+from multidocu_collator.modules.pdf_exporter import export_pdf_with_word
 from multidocu_collator.context import AppContext
+from multidocu_collator.flows.create_record_flow import (
+    _validated_payload,
+    create_record,
+    next_sequence,
+)
 from multidocu_collator.flows.summary_server_flow import _handler_class
 from multidocu_collator.config_loader import expand_env, select_cloudstation_root
 from multidocu_collator.modules.repository import build_dataset
@@ -45,6 +52,26 @@ DOCUMENT_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 def make_docx(path: Path) -> None:
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
         archive.writestr("word/document.xml", DOCUMENT_XML)
+
+
+TEMPLATE_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>资料编号</w:t></w:r></w:p><w:p><w:r><w:t>消防水-004</w:t></w:r></w:p>
+<w:p><w:r><w:t>工程名称</w:t></w:r></w:p><w:p><w:r><w:t>固定工程</w:t></w:r></w:p>
+<w:p><w:r><w:t>日   期</w:t></w:r></w:p><w:p><w:r><w:t>2026年8月16日</w:t></w:r></w:p>
+<w:p><w:r><w:t>致(单位)：</w:t></w:r><w:r><w:rPr><w:u/></w:rPr><w:t>旧单位</w:t></w:r></w:p>
+<w:p><w:r><w:t>事由：</w:t></w:r><w:r><w:rPr><w:u/></w:rPr><w:t>旧事由</w:t></w:r></w:p>
+<w:p><w:r><w:t>内容：</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:u/></w:rPr><w:t>旧内容一</w:t></w:r></w:p>
+<w:p><w:r><w:rPr><w:u/></w:rPr><w:t>旧内容二</w:t></w:r></w:p>
+<w:p><w:r><w:t>备注：固定备注</w:t></w:r></w:p>
+</w:body></w:document>'''
+
+
+def make_template_docx(path: Path) -> None:
+    with ZipFile(path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", TEMPLATE_XML)
+        archive.writestr("custom/unchanged.bin", b"unchanged")
 
 
 class WorkflowTests(unittest.TestCase):
@@ -142,6 +169,7 @@ class WorkflowTests(unittest.TestCase):
                 "<span>专业</span>",
                 "<th>编号</th>",
                 "<th>目录日期</th>",
+                "<th>致送单位</th>",
                 "<th>主题</th>",
             ]
             positions = [html.index(token) for token in header_tokens]
@@ -153,6 +181,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("row.folder_href", html)
             self.assertIn("openDirectory(event,row)", html)
             self.assertIn("/api/open-path", html)
+            self.assertIn("/api/create-record", html)
+            self.assertIn("buildNewRow()", html)
+            self.assertIn("Word 正在导出", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
             self.assertEqual(validate_summary_html(html_path, data)["errors"], [])
 
@@ -232,6 +263,19 @@ class WorkflowTests(unittest.TestCase):
                     urllib.request.urlopen(invalid, timeout=3)
                 self.assertEqual(error.exception.code, 400)
                 error.exception.close()
+                create_request = urllib.request.Request(
+                    base + "/api/create-record",
+                    data=json.dumps({"dataset_revision": 1}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.create_record",
+                    return_value={"ok": True, "document_code": "消防水-005"},
+                ) as creator:
+                    with urllib.request.urlopen(create_request, timeout=3) as response:
+                        self.assertEqual(response.status, 201)
+                    creator.assert_called_once_with(context, {"dataset_revision": 1})
             finally:
                 server.shutdown()
                 server.server_close()
@@ -291,6 +335,137 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(files[1]["kind_class"], "attachment-pdf")
         self.assertEqual(files[2]["type_label"], "JPG")
         self.assertEqual(files[2]["kind_class"], "")
+
+    def test_generates_docx_from_template_without_changing_other_parts(self) -> None:
+        from datetime import date
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            template = root / "template.docx"
+            output = root / "output.docx"
+            make_template_docx(template)
+            generate_contact_docx(
+                template,
+                output,
+                document_no="给排水-007",
+                document_date=date(2026, 8, 17),
+                recipient="测试致送单位",
+                subject="关于自动生成测试的事宜",
+                requirement_content="第一行需求\n第二行需求",
+            )
+            fields = parse_docx(output)
+            self.assertEqual(fields.document_no, "给排水-007")
+            self.assertEqual(fields.document_date, "2026-08-17")
+            self.assertEqual(fields.project_name, "固定工程")
+            self.assertEqual(fields.recipient, "测试致送单位")
+            self.assertEqual(fields.subject, "关于自动生成测试的事宜")
+            self.assertEqual(fields.requirement_content, "第一行需求\n第二行需求")
+            with ZipFile(output) as archive:
+                self.assertEqual(archive.read("custom/unchanged.bin"), b"unchanged")
+
+    def test_auto_sequence_and_cross_platform_filename_validation(self) -> None:
+        data = {
+            "records": [
+                {"discipline": "给排水", "sequence_no": "003", "document_code": "给排水-003"},
+                {"discipline": "给排水", "sequence_no": "009", "document_code": "给排水-009"},
+            ]
+        }
+        self.assertEqual(next_sequence(data, "给排水"), "010")
+        values = _validated_payload(
+            {
+                "discipline": "消防水",
+                "sequence_no": "",
+                "folder_date": "2026-08-16",
+                "recipient": "示例单位",
+                "subject": "关于测试的事宜",
+                "requirement_content": "测试内容",
+            },
+            data,
+        )
+        self.assertEqual(values["sequence_no"], "001")
+        with self.assertRaises(ValueError):
+            _validated_payload(
+                {
+                    "discipline": "消防水",
+                    "sequence_no": "002",
+                    "folder_date": "2026-08-16",
+                    "recipient": "示例单位",
+                    "subject": "含/斜杠",
+                    "requirement_content": "测试内容",
+                },
+                data,
+            )
+
+    def test_word_pdf_export_uses_platform_automation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            docx, pdf = root / "input.docx", root / "output.pdf"
+            docx.write_bytes(b"docx")
+
+            def produce_pdf(command, **kwargs):
+                pdf.write_bytes(b"%PDF-1.4\n" + b"x" * 120)
+
+            with patch(
+                "multidocu_collator.modules.pdf_exporter.subprocess.run",
+                side_effect=produce_pdf,
+            ) as run:
+                export_pdf_with_word(docx, pdf, system_name="Darwin")
+            self.assertEqual(run.call_args.args[0][0], "osascript")
+
+    def test_create_record_commits_only_complete_docx_and_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            context = AppContext(
+                project_root=root,
+                data_root=root,
+                json_name="data.json",
+                html_name="summary.html",
+                template_name="template.docx",
+            )
+            (root / "template.docx").write_bytes(b"template")
+            (root / "data.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "dataset_revision": 7,
+                        "records": [],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            payload = {
+                "dataset_revision": 7,
+                "discipline": "消防水",
+                "sequence_no": "005",
+                "folder_date": "2026-08-16",
+                "recipient": "测试致送单位",
+                "subject": "关于保存事务测试的事宜",
+                "requirement_content": "测试需求",
+            }
+
+            def make_word(template, output, **kwargs):
+                output.write_bytes(b"docx")
+
+            def make_pdf(docx, output):
+                output.write_bytes(b"%PDF-1.4\n" + b"x" * 120)
+
+            with patch(
+                "multidocu_collator.flows.create_record_flow.generate_contact_docx",
+                side_effect=make_word,
+            ), patch(
+                "multidocu_collator.flows.create_record_flow.export_pdf_with_word",
+                side_effect=make_pdf,
+            ), patch(
+                "multidocu_collator.flows.create_record_flow.run_build_archive",
+                return_value={"summary": {}},
+            ):
+                result = create_record(context, payload)
+            folder = root / "消防水-005-2026-08-16_关于保存事务测试的事宜"
+            self.assertTrue(folder.is_dir())
+            self.assertEqual(len(list(folder.glob("*.docx"))), 1)
+            self.assertEqual(len(list(folder.glob("*.pdf"))), 1)
+            self.assertEqual(result["document_code"], "消防水-005")
 
 
 if __name__ == "__main__":

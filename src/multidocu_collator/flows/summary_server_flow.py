@@ -14,10 +14,11 @@ from logging_config import get_logger
 
 from ..context import AppContext
 from ..modules.desktop import open_directory, resolve_relative_directory
+from .create_record_flow import create_record
 
 
 logger = get_logger(__name__)
-MAX_REQUEST_BYTES = 8 * 1024
+MAX_REQUEST_BYTES = 16 * 1024
 
 
 def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
@@ -38,7 +39,8 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
             super().do_GET()
 
         def do_POST(self) -> None:  # noqa: N802 - http.server 固定接口名
-            if urlsplit(self.path).path != "/api/open-path":
+            route = urlsplit(self.path).path
+            if route not in {"/api/open-path", "/api/create-record"}:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
             try:
@@ -46,11 +48,18 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 if length <= 0 or length > MAX_REQUEST_BYTES:
                     raise ValueError("请求体大小无效")
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
-                if not isinstance(payload, dict) or not isinstance(payload.get("path"), str):
+                if not isinstance(payload, dict):
+                    raise ValueError("请求体必须是 JSON 对象")
+                if route == "/api/create-record":
+                    result = create_record(context, payload)
+                    logger.info("已创建联系单: %s", result["document_code"])
+                    self._send_json(HTTPStatus.CREATED, result)
+                    return
+                if not isinstance(payload.get("path"), str):
                     raise ValueError("path 必须是相对目录字符串")
                 target = resolve_relative_directory(root, payload["path"])
                 open_directory(target)
-            except (ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+            except (ValueError, FileNotFoundError, FileExistsError, json.JSONDecodeError) as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             except Exception as exc:

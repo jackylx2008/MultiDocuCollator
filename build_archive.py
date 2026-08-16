@@ -53,6 +53,7 @@ def main() -> int:
         data_root=Path(raw_root).expanduser(),
         json_name=settings["json_name"],
         html_name=settings["html_name"],
+        template_name=settings["template_name"],
     )
     try:
         result = run_build_archive(context)

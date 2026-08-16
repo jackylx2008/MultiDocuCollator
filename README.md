@@ -2,7 +2,9 @@
 
 酒店需求工作联系单本地汇总工具。程序只读扫描资料子目录，解析 Word 当前有效
 文字及“内容：”后的下划线需求正文，在资料根目录生成正式 JSON 数据库和离线
-HTML 汇总。原始 Word、PDF、图片、DWG 及其他资料不会被移动、改名或删除。
+HTML 汇总。通过本地服务打开 HTML 时，还可在固定末行填写新联系单；程序以
+“消防水-004”固化模板生成 DOCX，并调用 Microsoft Word 导出 PDF。既有 Word、
+PDF、图片、DWG 及其他资料不会被移动、改名或删除。
 
 ## 数据规则
 
@@ -18,9 +20,10 @@ HTML 汇总。原始 Word、PDF、图片、DWG 及其他资料不会被移动、
 给排水-003-2026-08-13_关于厨房排水油脂分离器增加跨越管的事宜
 ```
 
-HTML 前五列固定为“序号、专业、编号、目录日期、主题”。JSON 每条记录包含中文
-字段 `需求内容`，其值只来自 Word 中“内容：”与“备注：”之间当前有效且带下划线
-的文字。Word 日期、事由与目录不一致时只记录核对提示，不修改原始资料。
+HTML 前六列固定为“序号、专业、编号、目录日期、致送单位、主题”。JSON 每条记录
+包含中文字段 `致送单位`、`需求内容`；后者只来自 Word 中“内容：”与“备注：”之间
+当前有效且带下划线的文字。Word 日期、事由与目录不一致时只记录核对提示，不修改
+原始资料。
 
 ## 配置
 
@@ -75,11 +78,12 @@ python build_archive.py
 
 - `酒店需求工作联系单数据.json`：唯一正式结构化数据源。
 - `酒店需求工作联系单汇总.html`：从 JSON 生成的离线查询页面。
+- `需求工作联系单模板.docx`：与 JSON、HTML 同级的“消防水-004”版式模板。
 
 重复运行按稳定记录 ID 和文件 SHA-256 更新，不重复创建记录。生成过程使用原子
 替换写入 JSON 和 HTML。
 
-## 从主题打开资料目录
+## 浏览与新增联系单
 
 推荐通过本地汇总服务打开页面：
 
@@ -97,6 +101,18 @@ HTML 和 JSON 只保存相对于资料根目录的路径。服务在运行时通
 `CLOUDSTATION_ROOT` 解析实际位置，并执行路径越界检查，因此同一份成果可以在
 Windows 和 macOS 的不同群晖根目录下使用。直接双击静态 HTML 时，主题链接退化
 为浏览器可访问的相对目录链接。
+
+表格末行始终保留新增表单，可填写专业、编号、目录日期、致送单位、主题和需求
+内容。编号会按所选专业取现有最大编号加一并补足三位，也可手动覆盖；日期默认
+本机当天且可修改。点击“保存”后，服务会：
+
+1. 校验页面数据版本、重复编号和 Windows/macOS 通用文件名规则。
+2. 在同盘临时目录套用模板生成 DOCX，并回读核对所有输入字段。
+3. 通过 macOS Word AppleScript 或 Windows Word COM 导出 PDF。
+4. DOCX、PDF 均有效后创建 `专业-编号-YYYY-MM-DD_主题` 目录并刷新 JSON/HTML。
+
+新增功能必须通过 `serve_summary.py` 使用；直接双击静态 HTML 时不会尝试写入。
+macOS 或 Windows 需要安装 Microsoft Word，并在首次使用时允许系统自动化权限。
 
 ## 独立校验
 
@@ -125,7 +141,9 @@ python -m compileall -q build_archive.py validate_archive.py logging_config.py s
 - 路径统一由 `pathlib.Path` 处理，JSON 内文件路径统一保存为 POSIX 风格相对路径。
 - `.venv/`、`.conda/` 和 `.vscode/` 均为每台机器本地环境，不通过 Git 或群晖
   复用。
-- 项目没有第三方运行依赖；不同系统只需安装 Python 3.10 或更高版本。
+- 项目没有第三方 Python 运行依赖；不同系统只需安装 Python 3.10 或更高版本。
+- 自动生成 PDF 支持装有 Microsoft Word 的 Windows 和 macOS；Linux 可继续扫描、
+  查询和校验，但不能从末行新增并导出 PDF。
 
 项目统一规范见 `docs/CROSS_PLATFORM_PROGRAMMING.md`、`docs/GitHub.md` 和
 `docs/COMMON_PROJECT_SKILLS.md`。
