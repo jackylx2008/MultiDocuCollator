@@ -79,6 +79,25 @@ python build_archive.py
 重复运行按稳定记录 ID 和文件 SHA-256 更新，不重复创建记录。生成过程使用原子
 替换写入 JSON 和 HTML。
 
+## 从主题打开资料目录
+
+推荐通过本地汇总服务打开页面：
+
+```bash
+python serve_summary.py
+```
+
+服务仅监听 `127.0.0.1` 并自动选择空闲端口。点击“主题”后：
+
+- Windows 使用资源管理器打开对应目录。
+- macOS 使用 Finder 打开对应目录。
+- Linux 使用 `xdg-open` 调用默认文件管理器。
+
+HTML 和 JSON 只保存相对于资料根目录的路径。服务在运行时通过当前平台的
+`CLOUDSTATION_ROOT` 解析实际位置，并执行路径越界检查，因此同一份成果可以在
+Windows 和 macOS 的不同群晖根目录下使用。直接双击静态 HTML 时，主题链接退化
+为浏览器可访问的相对目录链接。
+
 ## 独立校验
 
 ```bash
@@ -127,6 +146,7 @@ git push origin main
 ```text
 build_archive.py                 生成 JSON 和 HTML 的独立入口
 validate_archive.py              独立校验入口
+serve_summary.py                 本地汇总及跨平台目录打开入口
 logging_config.py                统一控制台及滚动文件日志
 src/multidocu_collator/modules/  DOCX、扫描、存储、HTML、校验能力
 src/multidocu_collator/flows/    工作流编排

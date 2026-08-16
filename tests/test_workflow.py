@@ -4,8 +4,13 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
@@ -15,6 +20,9 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from multidocu_collator.modules.docx_parser import parse_docx
+from multidocu_collator.modules.desktop import open_directory, resolve_relative_directory
+from multidocu_collator.context import AppContext
+from multidocu_collator.flows.summary_server_flow import _handler_class
 from multidocu_collator.config_loader import expand_env, select_cloudstation_root
 from multidocu_collator.modules.repository import build_dataset
 from multidocu_collator.modules.scanner import scan_data_root
@@ -142,8 +150,92 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn('id="statusFilter"', html)
             self.assertIn("row.discipline===discipline", html)
             self.assertIn("row.status===status", html)
+            self.assertIn("row.folder_href", html)
+            self.assertIn("openDirectory(event,row)", html)
+            self.assertIn("/api/open-path", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
             self.assertEqual(validate_summary_html(html_path, data)["errors"], [])
+
+    def test_resolves_only_relative_directory_inside_data_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            child = root / "给排水-003_示例"
+            child.mkdir()
+            self.assertEqual(
+                resolve_relative_directory(root, "给排水-003_示例"),
+                child.resolve(),
+            )
+            with self.assertRaises(ValueError):
+                resolve_relative_directory(root, "../outside")
+            with self.assertRaises(ValueError):
+                resolve_relative_directory(root, r"C:\Users\sample")
+            with self.assertRaises(FileNotFoundError):
+                resolve_relative_directory(root, "不存在")
+
+    def test_uses_platform_file_manager_commands(self) -> None:
+        path = Path("/tmp/示例目录")
+        with patch("multidocu_collator.modules.desktop.subprocess.run") as run:
+            open_directory(path, system_name="Darwin")
+            run.assert_called_once_with(["open", str(path)], check=True)
+        with patch("multidocu_collator.modules.desktop.subprocess.run") as run:
+            open_directory(path, system_name="Linux")
+            run.assert_called_once_with(["xdg-open", str(path)], check=True)
+        with patch(
+            "multidocu_collator.modules.desktop.os.startfile", create=True
+        ) as startfile:
+            open_directory(path, system_name="Windows")
+            startfile.assert_called_once_with(str(path))
+
+    def test_local_server_opens_only_valid_relative_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root / "给排水-001_示例"
+            folder.mkdir()
+            (root / "summary.html").write_text("<h1>summary</h1>", encoding="utf-8")
+            context = AppContext(
+                project_root=root,
+                data_root=root,
+                json_name="data.json",
+                html_name="summary.html",
+            )
+            try:
+                server = ThreadingHTTPServer(
+                    ("127.0.0.1", 0), _handler_class(context)
+                )
+            except PermissionError:
+                self.skipTest("当前沙箱不允许绑定本机回环端口")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with urllib.request.urlopen(base + "/", timeout=3) as response:
+                    self.assertIn(b"summary", response.read())
+                request = urllib.request.Request(
+                    base + "/api/open-path",
+                    data=json.dumps({"path": folder.name}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.open_directory"
+                ) as opener:
+                    with urllib.request.urlopen(request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    opener.assert_called_once_with(folder.resolve())
+                invalid = urllib.request.Request(
+                    base + "/api/open-path",
+                    data=json.dumps({"path": "../outside"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(invalid, timeout=3)
+                self.assertEqual(error.exception.code, 400)
+                error.exception.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
     def test_summary_embedded_json_escapes_script_markup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

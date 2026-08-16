@@ -16,11 +16,17 @@ Word DOCX → 当前修订及下划线解析 ├→ 正式 JSON → HTML 汇总
 JSON 是唯一正式结构化数据源；HTML 是可随时重建的只读投影视图，不能反向更新
 JSON。文件路径一律相对于资料根目录保存，校验时必须确认解析结果仍位于根目录内。
 
+主题列的目录链接同样只保存相对路径。静态 HTML 直接打开时使用相对链接降级；
+通过 `serve_summary.py` 访问时，页面把相对路径提交给只监听 `127.0.0.1` 的本地
+服务。服务完成根目录 containment 检查后，分别调用 Windows `os.startfile`、
+macOS `open` 或 Linux `xdg-open`，因此不同平台可以使用各自的 CloudStation
+绝对根目录，而不改变 JSON 或 HTML。
+
 ## 分层
 
 - 根目录入口：参数、配置、日志、退出状态。
 - `flows/`：扫描、保存、生成和校验的步骤编排。
-- `modules/`：DOCX 解析、文件分类、哈希、原子存储、HTML 和独立校验。
+- `modules/`：DOCX 解析、文件分类、哈希、原子存储、HTML、桌面打开和独立校验。
 
 ## DOCX 解析
 

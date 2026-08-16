@@ -31,6 +31,10 @@ def _href(relative_path: str) -> str:
     return quote(relative_path, safe="/")
 
 
+def _directory_href(relative_path: str) -> str:
+    return quote(relative_path.rstrip("/") + "/", safe="/")
+
+
 def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for record in data.get("records") or []:
@@ -53,6 +57,8 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
                 "sequence_no": record.get("sequence_no") or "",
                 "folder_date": record.get("folder_date") or "",
                 "subject": record.get("subject") or "",
+                "folder_path": record.get("folder_path") or "",
+                "folder_href": _directory_href(str(record.get("folder_path") or "")),
                 "requirement_content": record.get("需求内容") or "",
                 "word_date": word.get("document_date") or "",
                 "word_subject": word.get("subject") or "",
@@ -128,6 +134,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     .column-filter { width:100%; min-height:30px; padding:3px 5px; color:#17212b; border-color:#91a8ba; border-radius:5px; font-size:12px; font-weight:400; }
     td { padding:9px 7px; border-right:1px solid #edf1f4; border-bottom:1px solid #e5eaee; vertical-align:top; overflow-wrap:anywhere; white-space:pre-line; }
     tbody tr:hover { background:#f7fbff; }
+    .subject-link { color:#174d7a; font-weight:600; text-decoration:none; }
+    .subject-link:hover { color:#0c6db2; text-decoration:underline; }
     th:nth-child(1),td:nth-child(1) { width:4%; text-align:center; }
     th:nth-child(2),td:nth-child(2) { width:7%; }
     th:nth-child(3),td:nth-child(3) { width:5%; text-align:center; }
@@ -190,6 +198,16 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('warnings').textContent=data.warning_count;
     data.disciplines.forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;$('disciplineFilter').append(option)});
     function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=esc(text);if(className)el.className=className;return el}
+    async function openDirectory(event,row){
+      const localHosts=['127.0.0.1','localhost','::1'];
+      if(!['http:','https:'].includes(location.protocol)||!localHosts.includes(location.hostname))return;
+      event.preventDefault();
+      try{
+        const response=await fetch('/api/open-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:row.folder_path})});
+        const result=await response.json();
+        if(!response.ok)throw new Error(result.error||'目录打开失败');
+      }catch(error){alert(`目录打开失败：${error.message}`)}
+    }
     function render(){
       const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, status=$('statusFilter').value;
       const rows=data.rows.filter(row=>{
@@ -199,7 +217,8 @@ HTML_TEMPLATE = r'''<!doctype html>
       const body=$('body');body.replaceChildren();
       rows.forEach((row,index)=>{
         const tr=node('tr');
-        [index+1,row.discipline,row.sequence_no,row.folder_date,row.subject].forEach(value=>tr.append(node('td',value)));
+        [index+1,row.discipline,row.sequence_no,row.folder_date].forEach(value=>tr.append(node('td',value)));
+        const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='打开对应资料目录';subjectLink.addEventListener('click',event=>openDirectory(event,row));subjectCell.append(subjectLink);tr.append(subjectCell);
         const content=node('td');content.append(node('div',row.requirement_content||'—','content'));tr.append(content);
         const fileCell=node('td'),files=node('div',undefined,'files');
         row.files.forEach(file=>{const a=node('a',file.role_label,'file');a.href=file.href;a.title=file.name;files.append(a)});fileCell.append(files);tr.append(fileCell);
