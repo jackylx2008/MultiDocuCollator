@@ -20,7 +20,7 @@ ROLE_LABELS = {
     "source_word": "Word",
     "issued_pdf": "PDF",
     "signed_scan": "扫描件",
-    "attachment_pdf": "附件",
+    "attachment_pdf": "附件 PDF",
     "image_attachment": "图片",
     "drawing_source": "图纸",
     "auxiliary_file": "其他",
@@ -38,17 +38,30 @@ def _directory_href(relative_path: str) -> str:
 def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for record in data.get("records") or []:
-        files = [
-            {
-                "name": item.get("name") or "",
-                "role": item.get("role") or "auxiliary_file",
-                "role_label": ROLE_LABELS.get(
-                    str(item.get("role") or ""), str(item.get("role") or "其他")
-                ),
-                "href": _href(str(item.get("path") or "")),
-            }
-            for item in record.get("files") or []
-        ]
+        files = []
+        for item in record.get("files") or []:
+            role = str(item.get("role") or "auxiliary_file")
+            extension = str(item.get("extension") or "").lower()
+            type_label = extension.removeprefix(".").upper() or "无扩展名"
+            if extension == ".dwg":
+                role_label = "DWG"
+                kind_class = "dwg"
+            elif role == "attachment_pdf":
+                role_label = "附件 PDF"
+                kind_class = "attachment-pdf"
+            else:
+                role_label = ROLE_LABELS.get(role, role or "其他")
+                kind_class = ""
+            files.append(
+                {
+                    "name": item.get("name") or "",
+                    "role": role,
+                    "role_label": role_label,
+                    "type_label": type_label,
+                    "kind_class": kind_class,
+                    "href": _href(str(item.get("path") or "")),
+                }
+            )
         word = record.get("word_fields") or {}
         rows.append(
             {
@@ -148,6 +161,10 @@ HTML_TEMPLATE = r'''<!doctype html>
     .files { display:flex; flex-wrap:wrap; gap:5px; white-space:normal; }
     .file { display:inline-block; max-width:100%; padding:3px 6px; color:#174d7a; border:1px solid #bed3e4; border-radius:5px; background:#f3f9fd; text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .file:hover { color:white; background:var(--blue); }
+    .file.dwg { color:#5f368a; border-color:#c9afe2; background:#f7f0fc; font-weight:700; }
+    .file.dwg:hover { color:white; background:#69418e; }
+    .file.attachment-pdf { color:#8a4e00; border-color:#e4c48f; background:#fff7e9; font-weight:700; }
+    .file.attachment-pdf:hover { color:white; background:#a15c00; }
     .status { display:inline-block; padding:3px 7px; border-radius:999px; font-weight:700; }
     .status.complete { color:var(--ok); background:#e7f5ed; }
     .status.needs_review { color:var(--warn); background:#fff2dd; }
@@ -221,7 +238,7 @@ HTML_TEMPLATE = r'''<!doctype html>
         const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='打开对应资料目录';subjectLink.addEventListener('click',event=>openDirectory(event,row));subjectCell.append(subjectLink);tr.append(subjectCell);
         const content=node('td');content.append(node('div',row.requirement_content||'—','content'));tr.append(content);
         const fileCell=node('td'),files=node('div',undefined,'files');
-        row.files.forEach(file=>{const a=node('a',file.role_label,'file');a.href=file.href;a.title=file.name;files.append(a)});fileCell.append(files);tr.append(fileCell);
+        row.files.forEach(file=>{const a=node('a',file.role_label,`file${file.kind_class?' '+file.kind_class:''}`);a.href=file.href;a.title=`${file.name}\n文件类型：${file.type_label}`;files.append(a)});fileCell.append(files);tr.append(fileCell);
         const state=node('td');state.append(node('span',row.status_label,`status ${row.status}`));
         const details=node('details'),summary=node('summary',`Word 信息与提示（${row.warnings.length}）`);details.append(summary);
         const info=node('div',`Word日期：${row.word_date||'—'}\nWord事由：${row.word_subject||'—'}\n致送单位：${row.recipient||'—'}`);details.append(info);

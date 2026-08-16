@@ -26,7 +26,7 @@ from multidocu_collator.flows.summary_server_flow import _handler_class
 from multidocu_collator.config_loader import expand_env, select_cloudstation_root
 from multidocu_collator.modules.repository import build_dataset
 from multidocu_collator.modules.scanner import scan_data_root
-from multidocu_collator.modules.summary_html import export_summary_html
+from multidocu_collator.modules.summary_html import build_summary_view, export_summary_html
 from multidocu_collator.modules.validation import validate_dataset, validate_summary_html
 
 
@@ -262,6 +262,35 @@ class WorkflowTests(unittest.TestCase):
             parsed = json.loads(embedded)
             self.assertEqual(parsed["rows"][0]["subject"], "</script><script>alert(1)</script>")
             self.assertNotIn("</script><script>alert(1)", embedded)
+
+    def test_file_labels_distinguish_dwg_and_attachment_pdf(self) -> None:
+        data = {
+            "dataset_revision": 1,
+            "records": [{
+                "record_id": "id",
+                "discipline": "给排水",
+                "sequence_no": "001",
+                "folder_date": "2026-01-01",
+                "subject": "示例",
+                "folder_path": "给排水-001_示例",
+                "需求内容": "测试",
+                "word_fields": {},
+                "status": "complete",
+                "warnings": [],
+                "files": [
+                    {"name": "图纸.dwg", "extension": ".dwg", "role": "drawing_source", "path": "目录/图纸.dwg"},
+                    {"name": "附图.pdf", "extension": ".pdf", "role": "attachment_pdf", "path": "目录/附图.pdf"},
+                    {"name": "照片.jpg", "extension": ".jpg", "role": "image_attachment", "path": "目录/照片.jpg"},
+                ],
+            }],
+        }
+        files = build_summary_view(data)["rows"][0]["files"]
+        self.assertEqual(files[0]["role_label"], "DWG")
+        self.assertEqual(files[0]["kind_class"], "dwg")
+        self.assertEqual(files[1]["role_label"], "附件 PDF")
+        self.assertEqual(files[1]["kind_class"], "attachment-pdf")
+        self.assertEqual(files[2]["type_label"], "JPG")
+        self.assertEqual(files[2]["kind_class"], "")
 
 
 if __name__ == "__main__":
