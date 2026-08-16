@@ -129,9 +129,19 @@ class WorkflowTests(unittest.TestCase):
             html_path = root / "summary.html"
             export_summary_html(data, html_path)
             html = html_path.read_text(encoding="utf-8")
-            headers = ["序号", "专业", "编号", "目录日期", "主题"]
-            positions = [html.index(f"<th>{header}</th>") for header in headers]
+            header_tokens = [
+                "<th>序号</th>",
+                "<span>专业</span>",
+                "<th>编号</th>",
+                "<th>目录日期</th>",
+                "<th>主题</th>",
+            ]
+            positions = [html.index(token) for token in header_tokens]
             self.assertEqual(positions, sorted(positions))
+            self.assertIn('id="disciplineFilter"', html)
+            self.assertIn('id="statusFilter"', html)
+            self.assertIn("row.discipline===discipline", html)
+            self.assertIn("row.status===status", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
             self.assertEqual(validate_summary_html(html_path, data)["errors"], [])
 

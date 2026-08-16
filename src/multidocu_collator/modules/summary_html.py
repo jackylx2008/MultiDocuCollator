@@ -124,6 +124,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     .table-wrap { max-height:calc(100vh - 270px); overflow:auto; border:1px solid var(--line); border-top:0; background:white; }
     table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; font-size:13px; }
     th { position:sticky; top:0; z-index:2; padding:10px 7px; color:white; background:var(--navy); text-align:left; }
+    .column-header { display:flex; flex-direction:column; gap:6px; }
+    .column-filter { width:100%; min-height:30px; padding:3px 5px; color:#17212b; border-color:#91a8ba; border-radius:5px; font-size:12px; font-weight:400; }
     td { padding:9px 7px; border-right:1px solid #edf1f4; border-bottom:1px solid #e5eaee; vertical-align:top; overflow-wrap:anywhere; white-space:pre-line; }
     tbody tr:hover { background:#f7fbff; }
     th:nth-child(1),td:nth-child(1) { width:4%; text-align:center; }
@@ -147,7 +149,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     .warnings { margin:6px 0 0; padding-left:18px; color:#8a4e00; white-space:normal; }
     .empty { padding:40px; color:var(--muted); text-align:center; }
     @media (max-width:1100px) { main{padding:10px}.metrics{grid-template-columns:1fr 1fr}.table-wrap{max-height:none} table{min-width:1200px} }
-    @media print { header,.metrics,.toolbar{display:none}.table-wrap{max-height:none;overflow:visible;border:0} th{position:static} body{background:white} table{font-size:9px} }
+    @media print { header,.metrics,.toolbar,.column-filter{display:none}.table-wrap{max-height:none;overflow:visible;border:0} th{position:static} body{background:white} table{font-size:9px} }
   </style>
 </head>
 <body>
@@ -161,13 +163,16 @@ HTML_TEMPLATE = r'''<!doctype html>
     </section>
     <section class="toolbar">
       <input id="search" type="search" placeholder="搜索专业、编号、日期、主题、需求内容……">
-      <select id="discipline"><option value="">全部专业</option></select>
-      <select id="status"><option value="">全部状态</option><option value="complete">资料齐全</option><option value="needs_review">待核对</option><option value="incomplete">资料不完整</option></select>
       <span class="visible-count">当前显示 <b id="visible"></b> 条</span>
     </section>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>序号</th><th>专业</th><th>编号</th><th>目录日期</th><th>主题</th><th>需求内容</th><th>资料文件</th><th>状态 / 核对</th></tr></thead>
+        <thead><tr>
+          <th>序号</th>
+          <th><div class="column-header"><span>专业</span><select id="disciplineFilter" class="column-filter" aria-label="按专业筛选"><option value="">全部专业</option></select></div></th>
+          <th>编号</th><th>目录日期</th><th>主题</th><th>需求内容</th><th>资料文件</th>
+          <th><div class="column-header"><span>状态 / 核对</span><select id="statusFilter" class="column-filter" aria-label="按状态筛选"><option value="">全部状态</option><option value="complete">资料齐全</option><option value="needs_review">待核对</option><option value="incomplete">资料不完整</option></select></div></th>
+        </tr></thead>
         <tbody id="body"></tbody>
       </table>
       <div id="empty" class="empty" hidden>没有符合当前条件的记录</div>
@@ -183,10 +188,10 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('complete').textContent=data.status_counts.complete||0;
     $('review').textContent=data.status_counts.needs_review||0;
     $('warnings').textContent=data.warning_count;
-    data.disciplines.forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;$('discipline').append(option)});
+    data.disciplines.forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;$('disciplineFilter').append(option)});
     function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=esc(text);if(className)el.className=className;return el}
     function render(){
-      const query=$('search').value.trim().toLowerCase(), discipline=$('discipline').value, status=$('status').value;
+      const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, status=$('statusFilter').value;
       const rows=data.rows.filter(row=>{
         const haystack=[row.discipline,row.sequence_no,row.folder_date,row.subject,row.requirement_content,row.word_date,row.word_subject,row.recipient,...row.warnings].join(' ').toLowerCase();
         return (!query||haystack.includes(query))&&(!discipline||row.discipline===discipline)&&(!status||row.status===status);
@@ -206,7 +211,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       });
       $('visible').textContent=rows.length;$('empty').hidden=rows.length!==0;
     }
-    ['search','discipline','status'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();
+    ['search','disciplineFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();
   </script>
 </body>
 </html>
