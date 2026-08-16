@@ -15,6 +15,7 @@ from logging_config import get_logger
 from ..context import AppContext
 from ..modules.desktop import open_directory, resolve_relative_directory
 from .create_record_flow import create_record
+from .delete_record_flow import delete_record
 
 
 logger = get_logger(__name__)
@@ -40,7 +41,11 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802 - http.server 固定接口名
             route = urlsplit(self.path).path
-            if route not in {"/api/open-path", "/api/create-record"}:
+            if route not in {
+                "/api/open-path",
+                "/api/create-record",
+                "/api/delete-record",
+            }:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
             try:
@@ -54,6 +59,11 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     result = create_record(context, payload)
                     logger.info("已创建联系单: %s", result["document_code"])
                     self._send_json(HTTPStatus.CREATED, result)
+                    return
+                if route == "/api/delete-record":
+                    result = delete_record(context, payload)
+                    logger.info("联系单已移入回收目录: %s", result["trash_path"])
+                    self._send_json(HTTPStatus.OK, result)
                     return
                 if not isinstance(payload.get("path"), str):
                     raise ValueError("path 必须是相对目录字符串")

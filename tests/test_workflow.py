@@ -29,6 +29,7 @@ from multidocu_collator.flows.create_record_flow import (
     create_record,
     next_sequence,
 )
+from multidocu_collator.flows.delete_record_flow import delete_record
 from multidocu_collator.flows.summary_server_flow import _handler_class
 from multidocu_collator.config_loader import expand_env, select_cloudstation_root
 from multidocu_collator.modules.repository import build_dataset
@@ -182,6 +183,8 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("openDirectory(event,row)", html)
             self.assertIn("/api/open-path", html)
             self.assertIn("/api/create-record", html)
+            self.assertIn("/api/delete-record", html)
+            self.assertIn("delete-button", html)
             self.assertIn("buildNewRow()", html)
             self.assertIn("Word 正在导出", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
@@ -202,6 +205,19 @@ class WorkflowTests(unittest.TestCase):
                 resolve_relative_directory(root, r"C:\Users\sample")
             with self.assertRaises(FileNotFoundError):
                 resolve_relative_directory(root, "不存在")
+
+    def test_scanner_excludes_recoverable_trash_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            trash = root / "_trash"
+            trash.mkdir()
+            (trash / "给排水-001-2026-01-01_已删除记录").mkdir()
+            records, unmatched, ignored = scan_data_root(
+                root, generated_names={"_trash"}
+            )
+            self.assertEqual(records, [])
+            self.assertEqual(unmatched, [])
+            self.assertEqual(ignored, ["_trash"])
 
     def test_uses_platform_file_manager_commands(self) -> None:
         path = Path("/tmp/示例目录")
@@ -276,6 +292,28 @@ class WorkflowTests(unittest.TestCase):
                     with urllib.request.urlopen(create_request, timeout=3) as response:
                         self.assertEqual(response.status, 201)
                     creator.assert_called_once_with(context, {"dataset_revision": 1})
+                delete_request = urllib.request.Request(
+                    base + "/api/delete-record",
+                    data=json.dumps(
+                        {"dataset_revision": 1, "record_id": "id", "folder_path": folder.name}
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.delete_record",
+                    return_value={"ok": True, "trash_path": f"_trash/{folder.name}"},
+                ) as deleter:
+                    with urllib.request.urlopen(delete_request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    deleter.assert_called_once_with(
+                        context,
+                        {
+                            "dataset_revision": 1,
+                            "record_id": "id",
+                            "folder_path": folder.name,
+                        },
+                    )
             finally:
                 server.shutdown()
                 server.server_close()
@@ -466,6 +504,77 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(len(list(folder.glob("*.docx"))), 1)
             self.assertEqual(len(list(folder.glob("*.pdf"))), 1)
             self.assertEqual(result["document_code"], "消防水-005")
+
+    def test_delete_record_moves_directory_to_trash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder_name = "消防水-005-2026-08-16_关于删除测试的事宜"
+            source = root / folder_name
+            source.mkdir()
+            (source / "evidence.txt").write_text("保留", encoding="utf-8")
+            context = AppContext(root, root, "data.json", "summary.html")
+            (root / "data.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "dataset_revision": 4,
+                        "records": [{"record_id": "record-1", "folder_path": folder_name}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "multidocu_collator.flows.delete_record_flow.run_build_archive",
+                return_value={"summary": {}},
+            ):
+                result = delete_record(
+                    context,
+                    {
+                        "dataset_revision": 4,
+                        "record_id": "record-1",
+                        "folder_path": folder_name,
+                    },
+                )
+            destination = root / result["trash_path"]
+            self.assertFalse(source.exists())
+            self.assertEqual(
+                (destination / "evidence.txt").read_text(encoding="utf-8"), "保留"
+            )
+
+    def test_delete_record_rolls_back_when_database_refresh_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder_name = "给排水-008-2026-08-16_关于回滚测试的事宜"
+            source = root / folder_name
+            source.mkdir()
+            context = AppContext(root, root, "data.json", "summary.html")
+            (root / "data.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "dataset_revision": 5,
+                        "records": [{"record_id": "record-2", "folder_path": folder_name}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "multidocu_collator.flows.delete_record_flow.run_build_archive",
+                side_effect=RuntimeError("refresh failed"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    delete_record(
+                        context,
+                        {
+                            "dataset_revision": 5,
+                            "record_id": "record-2",
+                            "folder_path": folder_name,
+                        },
+                    )
+            self.assertTrue(source.is_dir())
+            self.assertEqual(list((root / "_trash").iterdir()), [])
 
 
 if __name__ == "__main__":

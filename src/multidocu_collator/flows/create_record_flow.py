@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 import tempfile
-import threading
 import unicodedata
 from datetime import date
 from pathlib import Path
@@ -15,9 +14,9 @@ from ..modules.document_generator import generate_contact_docx
 from ..modules.pdf_exporter import export_pdf_with_word
 from ..modules.repository import load_dataset
 from .build_archive_flow import run_build_archive
+from .mutation_lock import RECORD_MUTATION_LOCK
 
 
-CREATE_LOCK = threading.Lock()
 INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 WINDOWS_RESERVED = {
     "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
@@ -89,7 +88,7 @@ def _validated_payload(payload: dict[str, Any], data: dict[str, Any]) -> dict[st
 
 
 def create_record(context: AppContext, payload: dict[str, Any]) -> dict[str, Any]:
-    with CREATE_LOCK:
+    with RECORD_MUTATION_LOCK:
         data = load_dataset(context.json_path)
         if data is None:
             raise FileNotFoundError("JSON 数据库不存在，请先运行 build_archive.py")

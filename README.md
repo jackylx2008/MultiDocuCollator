@@ -137,6 +137,17 @@ Windows 和 macOS 的不同群晖根目录下使用。直接双击静态 HTML �
 新增功能必须通过 `serve_summary.py` 使用；直接双击静态 HTML 时不会尝试写入。
 macOS 或 Windows 需要安装 Microsoft Word，并在首次使用时允许系统自动化权限。
 
+每条现有记录的“状态/核对”列带有“删除”按钮。确认删除后，程序不会永久清除
+文件，而是把整条资料目录移动到 JSON/HTML 同级的 `_trash`，再重新扫描并从 JSON
+和 HTML 中移除该记录。`_trash` 不参与资料扫描；同名目录已存在时会为移入目录
+追加时间戳。若 JSON/HTML 刷新失败，程序会自动把目录移回原位置。
+
+需要恢复时，先停止本地服务，把对应目录从 `_trash` 移回资料根目录，然后重新运行：
+
+```bash
+python build_archive.py
+```
+
 新建结果的命名规则为：
 
 ```text
@@ -167,6 +178,7 @@ Code Runner 必须以项目根目录作为工作目录，否则可能找不到 `
   Microsoft Word。
 - Windows：确认已安装桌面版 Microsoft Word，并避免用其他程序占用目标 DOCX。
 - 不要直接双击 HTML；新增保存接口只在 `serve_summary.py` 启动期间可用。
+- 删除按钮同样只在本地服务中可用，并且只执行可恢复的 `_trash` 移动。
 
 ## 独立校验
 

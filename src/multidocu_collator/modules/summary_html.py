@@ -182,9 +182,12 @@ HTML_TEMPLATE = r'''<!doctype html>
     .save-button { width:100%; padding:9px 4px; color:white; border:0; border-radius:7px; background:var(--blue); cursor:pointer; font-weight:700; }
     .save-button:disabled { opacity:.55; cursor:wait; }
     .save-note { display:block; margin-top:5px; color:var(--muted); font-size:11px; white-space:normal; }
+    .delete-button { width:100%; margin-top:8px; padding:6px 4px; color:var(--bad); border:1px solid #dfadad; border-radius:6px; background:#fff5f5; cursor:pointer; font-size:12px; font-weight:700; }
+    .delete-button:hover { color:white; background:var(--bad); }
+    .delete-button:disabled { opacity:.55; cursor:wait; }
     .empty { padding:40px; color:var(--muted); text-align:center; }
     @media (max-width:1100px) { main{padding:10px}.metrics{grid-template-columns:1fr 1fr}.table-wrap{max-height:none} table{min-width:1200px} }
-    @media print { header,.metrics,.toolbar,.column-filter{display:none}.table-wrap{max-height:none;overflow:visible;border:0} th{position:static} body{background:white} table{font-size:9px} }
+    @media print { header,.metrics,.toolbar,.column-filter,.new-row,.delete-button{display:none}.table-wrap{max-height:none;overflow:visible;border:0} th{position:static} body{background:white} table{font-size:9px} }
   </style>
 </head>
 <body>
@@ -235,6 +238,17 @@ HTML_TEMPLATE = r'''<!doctype html>
         if(!response.ok)throw new Error(result.error||'目录打开失败');
       }catch(error){alert(`目录打开失败：${error.message}`)}
     }
+    async function deleteRecord(row,button){
+      const localHosts=['127.0.0.1','localhost','::1'];
+      if(!['http:','https:'].includes(location.protocol)||!localHosts.includes(location.hostname)){alert('删除需要通过 serve_summary.py 打开本页面。');return}
+      const code=`${row.discipline}-${row.sequence_no}`;
+      if(!confirm(`确定删除“${code} ${row.subject}”吗？\n\n整个资料目录将移动到同级 _trash，可人工恢复。`))return;
+      button.disabled=true;button.textContent='正在移入 _trash…';
+      try{
+        const response=await fetch('/api/delete-record',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,record_id:row.record_id,folder_path:row.folder_path})});
+        const result=await response.json();if(!response.ok)throw new Error(result.error||'删除失败');location.reload();
+      }catch(error){alert(`删除失败：${error.message}`);button.disabled=false;button.textContent='删除'}
+    }
     function render(){
       const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, status=$('statusFilter').value;
       const rows=data.rows.filter(row=>{
@@ -253,7 +267,8 @@ HTML_TEMPLATE = r'''<!doctype html>
         const details=node('details'),summary=node('summary',`Word 信息与提示（${row.warnings.length}）`);details.append(summary);
         const info=node('div',`Word日期：${row.word_date||'—'}\nWord事由：${row.word_subject||'—'}\n致送单位：${row.recipient||'—'}`);details.append(info);
         if(row.warnings.length){const list=node('ul',undefined,'warnings');row.warnings.forEach(w=>list.append(node('li',w)));details.append(list)}
-        state.append(details);tr.append(state);body.append(tr);
+        const deleteButton=node('button','删除','delete-button');deleteButton.type='button';deleteButton.title='将整条资料目录移动到同级 _trash';deleteButton.addEventListener('click',()=>deleteRecord(row,deleteButton));
+        state.append(details,deleteButton);tr.append(state);body.append(tr);
       });
       body.append(newRow||(newRow=buildNewRow()));
       $('visible').textContent=rows.length;$('empty').hidden=rows.length!==0;

@@ -6,6 +6,7 @@ from typing import Any
 
 from logging_config import get_logger
 
+from ..constants import TRASH_DIRECTORY_NAME
 from ..context import AppContext
 from ..modules.repository import build_dataset, load_dataset, save_dataset
 from ..modules.scanner import scan_data_root
@@ -24,7 +25,12 @@ def run_build_archive(context: AppContext) -> dict[str, Any]:
     previous = load_dataset(context.json_path)
     records, unmatched, ignored = scan_data_root(
         root,
-        generated_names={context.json_name, context.html_name, context.template_name},
+        generated_names={
+            context.json_name,
+            context.html_name,
+            context.template_name,
+            TRASH_DIRECTORY_NAME,
+        },
     )
     logger.info("扫描到 %d 条联系单记录", len(records))
     data, changed, summary = build_dataset(
