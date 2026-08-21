@@ -59,6 +59,7 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
                     "role_label": role_label,
                     "type_label": type_label,
                     "kind_class": kind_class,
+                    "path": str(item.get("path") or ""),
                     "href": _href(str(item.get("path") or "")),
                 }
             )
@@ -76,6 +77,9 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
                 "word_date": word.get("document_date") or "",
                 "word_subject": word.get("subject") or "",
                 "recipient": record.get("致送单位") or word.get("recipient") or "",
+                "print_status": (
+                    "是" if record.get("需求单已经打印") == "是" else "否"
+                ),
                 "status": record.get("status") or "",
                 "status_label": STATUS_LABELS.get(
                     str(record.get("status") or ""), str(record.get("status") or "")
@@ -140,6 +144,9 @@ HTML_TEMPLATE = r'''<!doctype html>
     input, select, textarea, button { font:inherit; }
     input, select, textarea { min-height:38px; padding:7px 10px; border:1px solid #b9c6d0; border-radius:7px; background:white; }
     .toolbar input { flex:1; min-width:260px; }
+    .refresh-button { min-height:38px; padding:7px 14px; color:white; border:0; border-radius:7px; background:var(--blue); cursor:pointer; font-weight:700; }
+    .refresh-button:hover { background:var(--navy); }
+    .refresh-button:disabled { opacity:.55; cursor:wait; }
     .visible-count { margin-left:auto; color:var(--muted); font-size:14px; }
     .table-wrap { max-height:calc(100vh - 270px); overflow:auto; border:1px solid var(--line); border-top:0; background:white; }
     table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; font-size:13px; }
@@ -154,15 +161,17 @@ HTML_TEMPLATE = r'''<!doctype html>
     th:nth-child(2),td:nth-child(2) { width:7%; }
     th:nth-child(3),td:nth-child(3) { width:5%; text-align:center; }
     th:nth-child(4),td:nth-child(4) { width:8%; }
-    th:nth-child(5),td:nth-child(5) { width:12%; }
-    th:nth-child(6),td:nth-child(6) { width:14%; }
-    th:nth-child(7),td:nth-child(7) { width:24%; }
-    th:nth-child(8),td:nth-child(8) { width:17%; }
-    th:nth-child(9),td:nth-child(9) { width:9%; }
+    th:nth-child(5),td:nth-child(5) { width:11%; }
+    th:nth-child(6),td:nth-child(6) { width:13%; }
+    th:nth-child(7),td:nth-child(7) { width:21%; }
+    th:nth-child(8),td:nth-child(8) { width:14%; }
+    th:nth-child(9),td:nth-child(9) { width:8%; text-align:center; }
+    th:nth-child(10),td:nth-child(10) { width:9%; }
     .content { max-height:9.2em; overflow:auto; line-height:1.55; }
     .files { display:flex; flex-wrap:wrap; gap:5px; white-space:normal; }
     .file { display:inline-block; max-width:100%; padding:3px 6px; color:#174d7a; border:1px solid #bed3e4; border-radius:5px; background:#f3f9fd; text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .file:hover { color:white; background:var(--blue); }
+    .file.copied { color:white; border-color:var(--ok); background:var(--ok); }
     .file.dwg { color:#5f368a; border-color:#c9afe2; background:#f7f0fc; font-weight:700; }
     .file.dwg:hover { color:white; background:#69418e; }
     .file.attachment-pdf { color:#8a4e00; border-color:#e4c48f; background:#fff7e9; font-weight:700; }
@@ -171,6 +180,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     .status.complete { color:var(--ok); background:#e7f5ed; }
     .status.needs_review { color:var(--warn); background:#fff2dd; }
     .status.incomplete { color:var(--bad); background:#fdeaea; }
+    .print-save-button { background:var(--ok); }
+    .print-select { width:100%; min-width:62px; }
     details { margin-top:7px; color:var(--muted); }
     summary { cursor:pointer; color:#36566f; }
     .warnings { margin:6px 0 0; padding-left:18px; color:#8a4e00; white-space:normal; }
@@ -201,6 +212,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     </section>
     <section class="toolbar">
       <input id="search" type="search" placeholder="搜索专业、编号、日期、致送单位、主题、需求内容……">
+      <button id="refreshArchive" class="refresh-button" type="button" title="重新扫描实际资料目录并更新 JSON/HTML">重新扫描刷新</button>
+      <button id="savePrintStatuses" class="refresh-button print-save-button" type="button" title="将本页所有打印标记保存到 JSON，并刷新 HTML">保存打印标记</button>
       <span class="visible-count">当前显示 <b id="visible"></b> 条</span>
     </section>
     <div class="table-wrap">
@@ -209,6 +222,7 @@ HTML_TEMPLATE = r'''<!doctype html>
           <th>序号</th>
           <th><div class="column-header"><span>专业</span><select id="disciplineFilter" class="column-filter" aria-label="按专业筛选"><option value="">全部专业</option></select></div></th>
           <th>编号</th><th>目录日期</th><th>致送单位</th><th>主题</th><th>需求内容</th><th>资料文件</th>
+          <th>需求单已经打印</th>
           <th><div class="column-header"><span>状态 / 核对</span><select id="statusFilter" class="column-filter" aria-label="按状态筛选"><option value="">全部状态</option><option value="complete">资料齐全</option><option value="needs_review">待核对</option><option value="incomplete">资料不完整</option></select></div></th>
         </tr></thead>
         <tbody id="body"></tbody>
@@ -221,6 +235,9 @@ HTML_TEMPLATE = r'''<!doctype html>
     const data=JSON.parse(document.getElementById('summaryData').textContent);
     const $=id=>document.getElementById(id);
     const esc=value=>String(value??'');
+    const localHosts=['127.0.0.1','localhost','::1'];
+    const isLocalService=()=>['http:','https:'].includes(location.protocol)&&localHosts.includes(location.hostname);
+    const errorMessage=error=>error instanceof TypeError&&error.message==='Failed to fetch'?'本地服务未运行，请重新启动 serve_summary.py 并刷新页面':error.message;
     $('subtitle').textContent=`数据版本 ${data.dataset_revision} · 生成时间 ${data.generated_at}`;
     $('total').textContent=data.record_count;
     $('complete').textContent=data.status_counts.complete||0;
@@ -229,14 +246,46 @@ HTML_TEMPLATE = r'''<!doctype html>
     data.disciplines.forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;$('disciplineFilter').append(option)});
     function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=esc(text);if(className)el.className=className;return el}
     async function openDirectory(event,row){
-      const localHosts=['127.0.0.1','localhost','::1'];
-      if(!['http:','https:'].includes(location.protocol)||!localHosts.includes(location.hostname))return;
+      if(!isLocalService())return;
       event.preventDefault();
       try{
         const response=await fetch('/api/open-path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:row.folder_path})});
         const result=await response.json();
         if(!response.ok)throw new Error(result.error||'目录打开失败');
-      }catch(error){alert(`目录打开失败：${error.message}`)}
+      }catch(error){alert(`目录打开失败：${errorMessage(error)}`)}
+    }
+    async function copyFile(event,file,anchor){
+      if(!isLocalService())return;
+      event.preventDefault();
+      const original=anchor.textContent;
+      try{
+        const response=await fetch('/api/copy-file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:file.path})});
+        const result=await response.json();
+        if(!response.ok)throw new Error(result.error||'复制失败');
+        anchor.textContent='已复制';anchor.classList.add('copied');
+        setTimeout(()=>{anchor.textContent=original;anchor.classList.remove('copied')},1200);
+      }catch(error){alert(`复制文件失败：${errorMessage(error)}`)}
+    }
+    async function refreshArchive(button){
+      if(!isLocalService()){alert('重新扫描需要通过 serve_summary.py 打开本页面。');return}
+      button.disabled=true;button.textContent='正在扫描…';
+      try{
+        const response=await fetch('/api/refresh-archive',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+        const result=await response.json();
+        if(!response.ok)throw new Error(result.error||'刷新失败');
+        location.reload();
+      }catch(error){alert(`刷新失败：${errorMessage(error)}`);button.disabled=false;button.textContent='重新扫描刷新'}
+    }
+    async function savePrintStatuses(button){
+      if(!isLocalService()){alert('保存打印标记需要通过 serve_summary.py 打开本页面。');return}
+      const statuses=Object.fromEntries(data.rows.map(row=>[row.record_id,row.print_status]));
+      button.disabled=true;button.textContent='正在保存…';
+      try{
+        const response=await fetch('/api/save-print-status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,statuses})});
+        const result=await response.json();
+        if(!response.ok)throw new Error(result.error||'保存失败');
+        location.reload();
+      }catch(error){alert(`保存打印标记失败：${errorMessage(error)}`);button.disabled=false;button.textContent='保存打印标记'}
     }
     async function deleteRecord(row,button){
       const localHosts=['127.0.0.1','localhost','::1'];
@@ -247,12 +296,12 @@ HTML_TEMPLATE = r'''<!doctype html>
       try{
         const response=await fetch('/api/delete-record',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,record_id:row.record_id,folder_path:row.folder_path})});
         const result=await response.json();if(!response.ok)throw new Error(result.error||'删除失败');location.reload();
-      }catch(error){alert(`删除失败：${error.message}`);button.disabled=false;button.textContent='删除'}
+      }catch(error){alert(`删除失败：${errorMessage(error)}`);button.disabled=false;button.textContent='删除'}
     }
     function render(){
       const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, status=$('statusFilter').value;
       const rows=data.rows.filter(row=>{
-        const haystack=[row.discipline,row.sequence_no,row.folder_date,row.subject,row.requirement_content,row.word_date,row.word_subject,row.recipient,...row.warnings].join(' ').toLowerCase();
+        const haystack=[row.discipline,row.sequence_no,row.folder_date,row.subject,row.requirement_content,row.word_date,row.word_subject,row.recipient,row.print_status,...row.warnings].join(' ').toLowerCase();
         return (!query||haystack.includes(query))&&(!discipline||row.discipline===discipline)&&(!status||row.status===status);
       });
       const body=$('body');body.replaceChildren();
@@ -262,7 +311,9 @@ HTML_TEMPLATE = r'''<!doctype html>
         const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='打开对应资料目录';subjectLink.addEventListener('click',event=>openDirectory(event,row));subjectCell.append(subjectLink);tr.append(subjectCell);
         const content=node('td');content.append(node('div',row.requirement_content||'—','content'));tr.append(content);
         const fileCell=node('td'),files=node('div',undefined,'files');
-        row.files.forEach(file=>{const a=node('a',file.role_label,`file${file.kind_class?' '+file.kind_class:''}`);a.href=file.href;a.title=`${file.name}\n文件类型：${file.type_label}`;files.append(a)});fileCell.append(files);tr.append(fileCell);
+        row.files.forEach(file=>{const a=node('a',file.role_label,`file${file.kind_class?' '+file.kind_class:''}`);a.href=file.href;a.title=`${file.name}\n文件类型：${file.type_label}\n左键复制，可在其他位置粘贴`;a.addEventListener('click',event=>copyFile(event,file,a));files.append(a)});fileCell.append(files);tr.append(fileCell);
+        const printCell=node('td'),printSelect=node('select',undefined,'print-select');
+        ['否','是'].forEach(value=>{const option=node('option',value);option.value=value;printSelect.append(option)});printSelect.value=row.print_status;printSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求单已经打印`);printSelect.addEventListener('change',()=>{row.print_status=printSelect.value});printCell.append(printSelect);tr.append(printCell);
         const state=node('td');state.append(node('span',row.status_label,`status ${row.status}`));
         const details=node('details'),summary=node('summary',`Word 信息与提示（${row.warnings.length}）`);details.append(summary);
         const info=node('div',`Word日期：${row.word_date||'—'}\nWord事由：${row.word_subject||'—'}\n致送单位：${row.recipient||'—'}`);details.append(info);
@@ -291,6 +342,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       const subject=field('textarea','subject','主题');const subjectCell=node('td');subjectCell.append(subject);tr.append(subjectCell);
       const content=field('textarea','requirement_content','需求内容');const contentCell=node('td');contentCell.append(content);tr.append(contentCell);
       const fileCell=node('td','保存后自动创建目录、DOCX 和 PDF');tr.append(fileCell);
+      tr.append(node('td','否'));
       const actionCell=node('td'),button=node('button','保存','save-button'),note=node('span','编号可自动生成，也可手填','save-note');button.type='button';actionCell.append(button,note);tr.append(actionCell);
       if(data.disciplines.length){discipline.value=data.disciplines[0];sequence.value=suggestedSequence(discipline.value)}
       discipline.addEventListener('input',()=>{if(!sequenceEdited)sequence.value=suggestedSequence(discipline.value.trim())});
@@ -302,10 +354,12 @@ HTML_TEMPLATE = r'''<!doctype html>
         try{
           const response=await fetch('/api/create-record',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();
           if(!response.ok)throw new Error(result.error||'保存失败');location.reload();
-        }catch(error){alert(`保存失败：${error.message}`);button.disabled=false;button.textContent='保存';note.textContent='编号可自动生成，也可手填'}
+        }catch(error){alert(`保存失败：${errorMessage(error)}`);button.disabled=false;button.textContent='保存';note.textContent='编号可自动生成，也可手填'}
       });
       return tr;
     }
+    $('refreshArchive').addEventListener('click',event=>refreshArchive(event.currentTarget));
+    $('savePrintStatuses').addEventListener('click',event=>savePrintStatuses(event.currentTarget));
     ['search','disciplineFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();
   </script>
 </body>

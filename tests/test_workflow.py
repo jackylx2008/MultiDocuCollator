@@ -11,6 +11,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
+from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
@@ -21,8 +22,13 @@ if str(SRC_DIR) not in sys.path:
 
 from multidocu_collator.modules.docx_parser import parse_docx
 from multidocu_collator.modules.document_generator import generate_contact_docx
-from multidocu_collator.modules.desktop import open_directory, resolve_relative_directory
-from multidocu_collator.modules.pdf_exporter import export_pdf_with_word
+from multidocu_collator.modules.desktop import (
+    copy_file_to_clipboard,
+    open_directory,
+    resolve_relative_directory,
+    resolve_relative_file,
+)
+from multidocu_collator.modules.pdf_exporter import WINDOWS_SCRIPT, export_pdf_with_word
 from multidocu_collator.context import AppContext
 from multidocu_collator.flows.create_record_flow import (
     _validated_payload,
@@ -31,6 +37,7 @@ from multidocu_collator.flows.create_record_flow import (
 )
 from multidocu_collator.flows.delete_record_flow import delete_record
 from multidocu_collator.flows.summary_server_flow import _handler_class
+from multidocu_collator.flows.update_print_status_flow import update_print_statuses
 from multidocu_collator.config_loader import expand_env, select_cloudstation_root
 from multidocu_collator.modules.repository import build_dataset
 from multidocu_collator.modules.scanner import scan_data_root
@@ -66,6 +73,9 @@ TEMPLATE_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:p><w:r><w:rPr><w:u/></w:rPr><w:t>旧内容一</w:t></w:r></w:p>
 <w:p><w:r><w:rPr><w:u/></w:rPr><w:t>旧内容二</w:t></w:r></w:p>
 <w:p><w:r><w:t>备注：固定备注</w:t></w:r></w:p>
+<w:p><w:r><w:t>以下空白</w:t></w:r></w:p>
+<w:p/><w:p/><w:p/><w:p/>
+<w:p><w:r><w:t>抄送: 固定单位</w:t></w:r></w:p>
 </w:body></w:document>'''
 
 
@@ -78,13 +88,13 @@ def make_template_docx(path: Path) -> None:
 class WorkflowTests(unittest.TestCase):
     def test_selects_cross_platform_cloudstation_roots(self) -> None:
         values = {
-            "CLOUDSTATION_ROOT_WINDOWS": r"D:\CloudStaion",
+            "CLOUDSTATION_ROOT_WINDOWS": r"D:\CloudStation",
             "CLOUDSTATION_ROOT_MACOS": "~/SynologyDrive/",
             "CLOUDSTATION_ROOT_LINUX": "~/CloudStation",
         }
         self.assertEqual(
             select_cloudstation_root(system_name="Windows", environ=values),
-            r"D:\CloudStaion",
+            r"D:\CloudStation",
         )
         self.assertEqual(
             select_cloudstation_root(system_name="Darwin", environ=values),
@@ -153,9 +163,20 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(changed)
             self.assertEqual(summary["records"], 1)
             self.assertEqual(data["dataset_revision"], 1)
+            self.assertEqual(data["records"][0]["需求单已经打印"], "否")
+            rescanned_records = json.loads(json.dumps(records, ensure_ascii=False))
+            data["records"][0]["需求单已经打印"] = "是"
+            preserved, _, _ = build_dataset(
+                root=root,
+                records=rescanned_records,
+                unmatched_files=unmatched,
+                ignored_files=ignored,
+                previous=data,
+            )
+            self.assertEqual(preserved["records"][0]["需求单已经打印"], "是")
             _, changed_again, _ = build_dataset(
                 root=root,
-                records=records,
+                records=rescanned_records,
                 unmatched_files=unmatched,
                 ignored_files=ignored,
                 previous=data,
@@ -182,13 +203,75 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("row.folder_href", html)
             self.assertIn("openDirectory(event,row)", html)
             self.assertIn("/api/open-path", html)
+            self.assertIn("/api/copy-file", html)
+            self.assertIn("copyFile(event,file,a)", html)
             self.assertIn("/api/create-record", html)
             self.assertIn("/api/delete-record", html)
+            self.assertIn("/api/refresh-archive", html)
+            self.assertIn('id="refreshArchive"', html)
+            self.assertIn("refreshArchive(event.currentTarget)", html)
+            self.assertIn("<th>需求单已经打印</th>", html)
+            self.assertIn('id="savePrintStatuses"', html)
+            self.assertIn("/api/save-print-status", html)
+            self.assertIn("savePrintStatuses(event.currentTarget)", html)
             self.assertIn("delete-button", html)
             self.assertIn("buildNewRow()", html)
             self.assertIn("Word 正在导出", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
             self.assertEqual(validate_summary_html(html_path, data)["errors"], [])
+
+    def test_updates_print_status_and_rejects_stale_page(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            context = AppContext(
+                project_root=root,
+                data_root=root,
+                json_name="data.json",
+                html_name="summary.html",
+            )
+            data = {
+                "schema_version": 1,
+                "dataset_revision": 3,
+                "created_at": "2026-08-21T10:00:00+08:00",
+                "updated_at": "2026-08-21T10:00:00+08:00",
+                "records": [
+                    {
+                        "record_id": "record-1",
+                        "discipline": "给排水",
+                        "sequence_no": "001",
+                        "folder_date": "2026-08-21",
+                        "subject": "测试",
+                        "folder_path": "给排水-001_测试",
+                        "需求内容": "测试内容",
+                        "word_fields": {},
+                        "files": [],
+                        "status": "complete",
+                        "warnings": [],
+                        "需求单已经打印": "否",
+                    }
+                ],
+                "changes": [],
+            }
+            context.json_path.write_text(
+                json.dumps(data, ensure_ascii=False), encoding="utf-8"
+            )
+
+            result = update_print_statuses(
+                context,
+                {"dataset_revision": 3, "statuses": {"record-1": "是"}},
+            )
+            saved = json.loads(context.json_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["changed"], 1)
+            self.assertEqual(result["dataset_revision"], 4)
+            self.assertEqual(saved["records"][0]["需求单已经打印"], "是")
+            self.assertEqual(saved["changes"][-1]["action"], "print_status_updated")
+            self.assertIn('"print_status":"是"', context.html_path.read_text(encoding="utf-8"))
+
+            with self.assertRaisesRegex(ValueError, "页面数据已经更新"):
+                update_print_statuses(
+                    context,
+                    {"dataset_revision": 3, "statuses": {"record-1": "否"}},
+                )
 
     def test_resolves_only_relative_directory_inside_data_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -205,6 +288,17 @@ class WorkflowTests(unittest.TestCase):
                 resolve_relative_directory(root, r"C:\Users\sample")
             with self.assertRaises(FileNotFoundError):
                 resolve_relative_directory(root, "不存在")
+
+            document = child / "示例.pdf"
+            document.write_bytes(b"%PDF-1.4\n")
+            self.assertEqual(
+                resolve_relative_file(root, f"{child.name}/示例.pdf"),
+                document.resolve(),
+            )
+            with self.assertRaises(ValueError):
+                resolve_relative_file(root, "../outside.pdf")
+            with self.assertRaises(FileNotFoundError):
+                resolve_relative_file(root, f"{child.name}/不存在.pdf")
 
     def test_scanner_excludes_recoverable_trash_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -232,6 +326,8 @@ class WorkflowTests(unittest.TestCase):
         ) as startfile:
             open_directory(path, system_name="Windows")
             startfile.assert_called_once_with(str(path))
+        with self.assertRaisesRegex(RuntimeError, "仅支持 Windows"):
+            copy_file_to_clipboard(path, system_name="Linux")
 
     def test_local_server_opens_only_valid_relative_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -269,6 +365,20 @@ class WorkflowTests(unittest.TestCase):
                     with urllib.request.urlopen(request, timeout=3) as response:
                         self.assertEqual(response.status, 200)
                     opener.assert_called_once_with(folder.resolve())
+                source_file = folder / "资料.pdf"
+                source_file.write_bytes(b"%PDF-1.4\n")
+                copy_request = urllib.request.Request(
+                    base + "/api/copy-file",
+                    data=json.dumps({"path": f"{folder.name}/资料.pdf"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.copy_file_to_clipboard"
+                ) as copier:
+                    with urllib.request.urlopen(copy_request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    copier.assert_called_once_with(source_file.resolve())
                 invalid = urllib.request.Request(
                     base + "/api/open-path",
                     data=json.dumps({"path": "../outside"}).encode("utf-8"),
@@ -279,6 +389,36 @@ class WorkflowTests(unittest.TestCase):
                     urllib.request.urlopen(invalid, timeout=3)
                 self.assertEqual(error.exception.code, 400)
                 error.exception.close()
+                refresh_request = urllib.request.Request(
+                    base + "/api/refresh-archive",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.run_build_archive",
+                    return_value={"changed": True, "summary": {"records": 1}},
+                ) as refresher:
+                    with urllib.request.urlopen(refresh_request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    refresher.assert_called_once_with(context)
+                print_payload = {
+                    "dataset_revision": 1,
+                    "statuses": {"id": "是"},
+                }
+                print_request = urllib.request.Request(
+                    base + "/api/save-print-status",
+                    data=json.dumps(print_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.update_print_statuses",
+                    return_value={"ok": True, "changed": 1, "dataset_revision": 2},
+                ) as updater:
+                    with urllib.request.urlopen(print_request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    updater.assert_called_once_with(context, print_payload)
                 create_request = urllib.request.Request(
                     base + "/api/create-record",
                     data=json.dumps({"dataset_revision": 1}).encode("utf-8"),
@@ -369,6 +509,7 @@ class WorkflowTests(unittest.TestCase):
         files = build_summary_view(data)["rows"][0]["files"]
         self.assertEqual(files[0]["role_label"], "DWG")
         self.assertEqual(files[0]["kind_class"], "dwg")
+        self.assertEqual(files[0]["path"], "目录/图纸.dwg")
         self.assertEqual(files[1]["role_label"], "附件 PDF")
         self.assertEqual(files[1]["kind_class"], "attachment-pdf")
         self.assertEqual(files[2]["type_label"], "JPG")
@@ -400,6 +541,38 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(fields.requirement_content, "第一行需求\n第二行需求")
             with ZipFile(output) as archive:
                 self.assertEqual(archive.read("custom/unchanged.bin"), b"unchanged")
+
+            long_output = root / "long-output.docx"
+            long_line = (
+                "请相关单位根据现场情况完成设备、管线及控制系统调整，并在实施后提交完整记录和验收资料。"
+                "同时复核相关技术参数、安装位置和联动逻辑，确认无误后完成书面回复。"
+            )
+            generate_contact_docx(
+                template,
+                long_output,
+                document_no="给排水-008",
+                document_date=date(2026, 8, 17),
+                recipient="测试致送单位",
+                subject="关于动态空白测试的事宜",
+                requirement_content="\n".join([long_line] * 4),
+            )
+            with ZipFile(long_output) as archive:
+                document = ET.fromstring(archive.read("word/document.xml"))
+            namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+            paragraphs = list(document.iter(namespace + "p"))
+            texts = [
+                "".join(node.text or "" for node in paragraph.iter(namespace + "t"))
+                for paragraph in paragraphs
+            ]
+            marker_index = texts.index("以下空白")
+            copy_index = next(
+                index for index in range(marker_index + 1, len(texts))
+                if texts[index].replace(" ", "").startswith("抄送:")
+            )
+            self.assertEqual(
+                sum(not text.strip() for text in texts[marker_index + 1 : copy_index]),
+                0,
+            )
 
     def test_auto_sequence_and_cross_platform_filename_validation(self) -> None:
         data = {
@@ -449,6 +622,19 @@ class WorkflowTests(unittest.TestCase):
             ) as run:
                 export_pdf_with_word(docx, pdf, system_name="Darwin")
             self.assertEqual(run.call_args.args[0][0], "osascript")
+
+            pdf.unlink()
+            with patch(
+                "multidocu_collator.modules.pdf_exporter.subprocess.run",
+                side_effect=produce_pdf,
+            ) as run:
+                export_pdf_with_word(docx, pdf, system_name="Windows")
+            command = run.call_args.args[0]
+            environment = run.call_args.kwargs["env"]
+            self.assertEqual(command[0], "powershell.exe")
+            self.assertEqual(command[-1], WINDOWS_SCRIPT)
+            self.assertEqual(environment["MULTIDOCU_INPUT_PATH"], str(docx.resolve()))
+            self.assertEqual(environment["MULTIDOCU_OUTPUT_PATH"], str(pdf.resolve()))
 
     def test_create_record_commits_only_complete_docx_and_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

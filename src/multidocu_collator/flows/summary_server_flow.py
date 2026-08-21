@@ -13,13 +13,21 @@ from urllib.parse import quote, urlsplit
 from logging_config import get_logger
 
 from ..context import AppContext
-from ..modules.desktop import open_directory, resolve_relative_directory
+from ..modules.desktop import (
+    copy_file_to_clipboard,
+    open_directory,
+    resolve_relative_directory,
+    resolve_relative_file,
+)
+from .build_archive_flow import run_build_archive
 from .create_record_flow import create_record
 from .delete_record_flow import delete_record
+from .mutation_lock import RECORD_MUTATION_LOCK
+from .update_print_status_flow import update_print_statuses
 
 
 logger = get_logger(__name__)
-MAX_REQUEST_BYTES = 16 * 1024
+MAX_REQUEST_BYTES = 1024 * 1024
 
 
 def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
@@ -43,8 +51,11 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
             route = urlsplit(self.path).path
             if route not in {
                 "/api/open-path",
+                "/api/copy-file",
                 "/api/create-record",
                 "/api/delete-record",
+                "/api/refresh-archive",
+                "/api/save-print-status",
             }:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
@@ -55,6 +66,17 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 if not isinstance(payload, dict):
                     raise ValueError("请求体必须是 JSON 对象")
+                if route == "/api/refresh-archive":
+                    with RECORD_MUTATION_LOCK:
+                        result = run_build_archive(context)
+                    logger.info("已从实际资料目录重新扫描并刷新汇总")
+                    self._send_json(HTTPStatus.OK, result)
+                    return
+                if route == "/api/save-print-status":
+                    result = update_print_statuses(context, payload)
+                    logger.info("已保存 %d 条需求单打印标记", result["changed"])
+                    self._send_json(HTTPStatus.OK, result)
+                    return
                 if route == "/api/create-record":
                     result = create_record(context, payload)
                     logger.info("已创建联系单: %s", result["document_code"])
@@ -66,17 +88,25 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     self._send_json(HTTPStatus.OK, result)
                     return
                 if not isinstance(payload.get("path"), str):
-                    raise ValueError("path 必须是相对目录字符串")
+                    raise ValueError("path 必须是相对路径字符串")
+                if route == "/api/copy-file":
+                    target = resolve_relative_file(root, payload["path"])
+                    copy_file_to_clipboard(target)
+                    logger.info("文件已复制到剪贴板: %s", target)
+                    self._send_json(
+                        HTTPStatus.OK, {"ok": True, "file_name": target.name}
+                    )
+                    return
                 target = resolve_relative_directory(root, payload["path"])
                 open_directory(target)
             except (ValueError, FileNotFoundError, FileExistsError, json.JSONDecodeError) as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             except Exception as exc:
-                logger.exception("打开目录失败")
+                logger.exception("本地资料操作失败")
                 self._send_json(
                     HTTPStatus.INTERNAL_SERVER_ERROR,
-                    {"error": f"系统无法打开目录: {exc}"},
+                    {"error": f"系统无法完成操作: {exc}"},
                 )
                 return
             logger.info("已打开资料目录: %s", target)

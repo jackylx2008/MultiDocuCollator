@@ -54,6 +54,8 @@ def validate_dataset(
             errors.append(f"记录缺少“需求内容”字段: {record_id}")
         if "致送单位" not in record:
             errors.append(f"记录缺少“致送单位”字段: {record_id}")
+        if record.get("需求单已经打印") not in {"是", "否"}:
+            errors.append(f"需求单打印标记必须是“是”或“否”: {record_id}")
         for item in record.get("files") or []:
             relative = str(item.get("path") or "")
             if relative in file_paths:
@@ -95,4 +97,14 @@ def validate_summary_html(
         errors.append("HTML 数据版本与 JSON 不一致")
     if int(view.get("record_count") or 0) != len(data.get("records") or []):
         errors.append("HTML 记录数与 JSON 不一致")
+    expected_print_statuses = {
+        str(record.get("record_id") or ""): record.get("需求单已经打印")
+        for record in data.get("records") or []
+    }
+    actual_print_statuses = {
+        str(row.get("record_id") or ""): row.get("print_status")
+        for row in view.get("rows") or []
+    }
+    if actual_print_statuses != expected_print_statuses:
+        errors.append("HTML 需求单打印标记与 JSON 不一致")
     return {"errors": errors, "warnings": warnings}

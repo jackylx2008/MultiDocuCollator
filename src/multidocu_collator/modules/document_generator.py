@@ -6,6 +6,7 @@ import copy
 import io
 import re
 import tempfile
+import unicodedata
 from datetime import date
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -19,6 +20,10 @@ W = f"{{{W_NS}}}"
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 ET.register_namespace("w", W_NS)
 
+# 正文原型约可容纳 45 个全角字符；用半角宽度单位估算 Word 自动换行数。
+CONTENT_LINE_CAPACITY = 90
+BODY_LINE_HEIGHT_TWIPS = 240
+
 
 def _paragraph_text(paragraph: ET.Element) -> str:
     return "".join(node.text or "" for node in paragraph.iter(f"{W}t"))
@@ -26,6 +31,14 @@ def _paragraph_text(paragraph: ET.Element) -> str:
 
 def _normalized(value: str) -> str:
     return re.sub(r"\s+", "", value)
+
+
+def _estimated_visual_lines(value: str) -> int:
+    units = sum(
+        2 if unicodedata.east_asian_width(character) in "WFA" else 1
+        for character in value
+    )
+    return max(1, (units + CONTENT_LINE_CAPACITY - 1) // CONTENT_LINE_CAPACITY)
 
 
 def _parse_preserving_namespaces(xml: bytes) -> ET.Element:
@@ -93,7 +106,7 @@ def _replace_after_colon(paragraph: ET.Element, value: str) -> None:
         raise ValueError("模板字段冒号后没有可替换文字节点")
 
 
-def _replace_content(document: ET.Element, value: str) -> None:
+def _replace_content(document: ET.Element, value: str) -> int:
     paragraphs = list(document.iter(f"{W}p"))
     content_index = next(
         (i for i, p in enumerate(paragraphs) if _normalized(_paragraph_text(p)) == "内容："),
@@ -118,6 +131,9 @@ def _replace_content(document: ET.Element, value: str) -> None:
         raise ValueError("模板内容正文区结构不符合预期")
     insertion_index = list(parent).index(candidates[0])
     prototype = copy.deepcopy(candidates[0])
+    original_line_count = sum(
+        _estimated_visual_lines(_paragraph_text(paragraph)) for paragraph in candidates
+    )
     for paragraph in candidates:
         parent.remove(paragraph)
     lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n") or [""]
@@ -125,6 +141,89 @@ def _replace_content(document: ET.Element, value: str) -> None:
         paragraph = copy.deepcopy(prototype)
         _set_paragraph_text(paragraph, line)
         parent.insert(insertion_index + offset, paragraph)
+    new_line_count = sum(_estimated_visual_lines(line) for line in lines)
+    return new_line_count - original_line_count
+
+
+def _resize_filler_paragraphs(document: ET.Element, line_delta: int) -> int:
+    """按可变内容的换行增量调整“以下空白”后的空段落数量。"""
+    paragraphs = list(document.iter(f"{W}p"))
+    blank_marker_index = next(
+        (
+            index
+            for index, paragraph in enumerate(paragraphs)
+            if _normalized(_paragraph_text(paragraph)) == "以下空白"
+        ),
+        None,
+    )
+    if blank_marker_index is None:
+        return 0
+    copy_index = next(
+        (
+            index
+            for index in range(blank_marker_index + 1, len(paragraphs))
+            if _normalized(_paragraph_text(paragraphs[index])).startswith("抄送")
+        ),
+        None,
+    )
+    if copy_index is None:
+        return 0
+    parent_map = {child: parent for parent in document.iter() for child in parent}
+    marker = paragraphs[blank_marker_index]
+    copy_paragraph = paragraphs[copy_index]
+    parent = parent_map.get(marker)
+    if parent is None or parent_map.get(copy_paragraph) is not parent:
+        return 0
+    fillers = [
+        paragraph
+        for paragraph in paragraphs[blank_marker_index + 1 : copy_index]
+        if parent_map.get(paragraph) is parent and not _normalized(_paragraph_text(paragraph))
+    ]
+    if not fillers:
+        return max(0, line_delta)
+    target_count = max(0, len(fillers) - line_delta)
+    if target_count < len(fillers):
+        for paragraph in fillers[target_count:]:
+            parent.remove(paragraph)
+    elif target_count > len(fillers):
+        prototype = copy.deepcopy(fillers[-1])
+        insertion_index = list(parent).index(copy_paragraph)
+        for offset in range(target_count - len(fillers)):
+            parent.insert(insertion_index + offset, copy.deepcopy(prototype))
+    return max(0, line_delta - len(fillers))
+
+
+def _shrink_body_row_minimum(document: ET.Element, overflow_lines: int) -> None:
+    """正文超过可回收空白时，缩减外层表格行的最小高度以避免空白尾页。"""
+    if overflow_lines <= 0:
+        return
+    paragraphs = list(document.iter(f"{W}p"))
+    marker = next(
+        (
+            paragraph
+            for paragraph in paragraphs
+            if _normalized(_paragraph_text(paragraph)) == "以下空白"
+        ),
+        None,
+    )
+    if marker is None:
+        return
+    parent_map = {child: parent for parent in document.iter() for child in parent}
+    cell = parent_map.get(marker)
+    row = parent_map.get(cell) if cell is not None else None
+    if row is None or row.tag != f"{W}tr":
+        return
+    height = row.find(f"{W}trPr/{W}trHeight")
+    if height is None:
+        return
+    try:
+        current = int(height.get(f"{W}val") or "0")
+    except ValueError:
+        return
+    height.set(
+        f"{W}val",
+        str(max(BODY_LINE_HEIGHT_TWIPS, current - overflow_lines * BODY_LINE_HEIGHT_TWIPS)),
+    )
 
 
 def generate_contact_docx(
@@ -156,9 +255,23 @@ def generate_contact_docx(
             subject_paragraph = next(
                 p for p in paragraphs if _normalized(_paragraph_text(p)).startswith("事由：")
             )
+            original_recipient_lines = _estimated_visual_lines(
+                _paragraph_text(recipient_paragraph)
+            )
+            original_subject_lines = _estimated_visual_lines(
+                _paragraph_text(subject_paragraph)
+            )
             _replace_after_colon(recipient_paragraph, recipient)
             _replace_after_colon(subject_paragraph, subject)
-            _replace_content(document, requirement_content)
+            variable_line_delta = (
+                _estimated_visual_lines(_paragraph_text(recipient_paragraph))
+                - original_recipient_lines
+                + _estimated_visual_lines(_paragraph_text(subject_paragraph))
+                - original_subject_lines
+            )
+            variable_line_delta += _replace_content(document, requirement_content)
+            overflow_lines = _resize_filler_paragraphs(document, variable_line_delta)
+            _shrink_body_row_minimum(document, overflow_lines)
             document_xml = _serialize_preserving_root(document, original_document_xml)
             output.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(

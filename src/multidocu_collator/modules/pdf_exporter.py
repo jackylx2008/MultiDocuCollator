@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -22,15 +23,28 @@ end run
 '''
 
 WINDOWS_SCRIPT = r'''
-$inputPath = $args[0]
-$outputPath = $args[1]
-$word = New-Object -ComObject Word.Application
-$word.Visible = $false
-$word.DisplayAlerts = 0
+$inputPath = $env:MULTIDOCU_INPUT_PATH
+$outputPath = $env:MULTIDOCU_OUTPUT_PATH
+$word = $null
+$doc = $null
 try {
-  $doc = $word.Documents.Open($inputPath)
-  try { $doc.SaveAs2($outputPath, 17) } finally { $doc.Close($false) }
-} finally { $word.Quit() }
+  $word = New-Object -ComObject Word.Application
+  $word.Visible = $false
+  $word.DisplayAlerts = 0
+  $doc = $word.Documents.Open([string]$inputPath)
+  $doc.SaveAs2([string]$outputPath, 17)
+} finally {
+  if ($null -ne $doc) {
+    $doc.Close($false)
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc)
+  }
+  if ($null -ne $word) {
+    $word.Quit()
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($word)
+  }
+  [GC]::Collect()
+  [GC]::WaitForPendingFinalizers()
+}
 '''
 
 
@@ -55,13 +69,22 @@ def export_pdf_with_word(
             "-NonInteractive",
             "-Command",
             WINDOWS_SCRIPT,
-            str(docx.resolve()),
-            str(pdf.resolve()),
         ]
+        environment = os.environ.copy()
+        environment["MULTIDOCU_INPUT_PATH"] = str(docx.resolve())
+        environment["MULTIDOCU_OUTPUT_PATH"] = str(pdf.resolve())
     else:
         raise RuntimeError("自动导出 PDF 目前仅支持安装了 Microsoft Word 的 macOS/Windows")
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True, timeout=180)
+        run_options = {
+            "check": True,
+            "capture_output": True,
+            "text": True,
+            "timeout": 180,
+        }
+        if system == "Windows":
+            run_options["env"] = environment
+        subprocess.run(command, **run_options)
     except FileNotFoundError as exc:
         raise RuntimeError("未找到 Microsoft Word 导出所需的系统命令") from exc
     except subprocess.TimeoutExpired as exc:

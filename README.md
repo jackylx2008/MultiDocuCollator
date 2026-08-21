@@ -21,9 +21,10 @@ PDF、图片、DWG 及其他资料不会被移动、改名或删除。
 ```
 
 HTML 前六列固定为“序号、专业、编号、目录日期、致送单位、主题”。JSON 每条记录
-包含中文字段 `致送单位`、`需求内容`；后者只来自 Word 中“内容：”与“备注：”之间
-当前有效且带下划线的文字。Word 日期、事由与目录不一致时只记录核对提示，不修改
-原始资料。
+包含中文字段 `致送单位`、`需求内容`、`需求单已经打印`；打印标记只允许“是”或
+“否”，其余字段由资料目录和 Word 自动提取。`需求内容` 只来自 Word 中“内容：”
+与“备注：”之间当前有效且带下划线的文字。Word 日期、事由与目录不一致时只记录
+核对提示，不修改原始资料。
 
 ## 配置
 
@@ -53,7 +54,7 @@ python -m pip --version
 同步根目录：
 
 ```dotenv
-CLOUDSTATION_ROOT_WINDOWS=D:\CloudStaion
+CLOUDSTATION_ROOT_WINDOWS=D:\CloudStation
 CLOUDSTATION_ROOT_MACOS=~/SynologyDrive/
 CLOUDSTATION_ROOT_LINUX=~/CloudStation
 ```
@@ -83,7 +84,11 @@ Windows PowerShell 将第一条命令替换为：
 .\.venv\Scripts\Activate.ps1
 ```
 
-浏览器会打开 `127.0.0.1` 本地地址。完成使用后回到终端按 `Ctrl+C` 停止服务。
+浏览器会打开 `127.0.0.1` 本地地址。页面的保存、删除和复制文件功能依赖本地服务
+持续运行；完成使用后回到终端按 `Ctrl+C` 停止服务。
+
+Windows 可直接双击项目根目录的 `build_archive.cmd`：脚本会先更新 JSON/HTML，
+构建成功后继续启动 `serve_summary.py` 并自动打开浏览器。
 
 ## 生成成果
 
@@ -106,7 +111,7 @@ python build_archive.py
 重复运行按稳定记录 ID 和文件 SHA-256 更新，不重复创建记录。生成过程使用原子
 替换写入 JSON 和 HTML。
 
-## 浏览与新增联系单
+## 浏览与管理联系单
 
 推荐通过本地汇总服务打开页面：
 
@@ -119,6 +124,17 @@ python serve_summary.py
 - Windows 使用资源管理器打开对应目录。
 - macOS 使用 Finder 打开对应目录。
 - Linux 使用 `xdg-open` 调用默认文件管理器。
+
+在 Windows 上通过本地服务打开页面时，左键点击“资料文件”中的文件标签，会把
+真实文件复制到系统文件剪贴板，随后可在资源管理器、桌面或其他目录直接粘贴。
+直接双击静态 HTML 时，文件标签仍按普通链接打开。
+
+人工调整实际资料目录名称或目录内文件后，可点击页面工具栏的“重新扫描刷新”。服务
+会重新提取实际目录信息、更新 JSON、重建 HTML，并自动刷新当前页面。
+
+“需求单已经打印”列可人工选择“是”或“否”（旧记录默认“否”）。修改后点击页面
+顶部的“保存打印标记”，会写回正式 JSON 并同步刷新 HTML；重新扫描实际目录时会
+保留已保存的人工标记。
 
 HTML 和 JSON 只保存相对于资料根目录的路径。服务在运行时通过当前平台的
 `CLOUDSTATION_ROOT` 解析实际位置，并执行路径越界检查，因此同一份成果可以在
@@ -133,6 +149,9 @@ Windows 和 macOS 的不同群晖根目录下使用。直接双击静态 HTML �
 2. 在同盘临时目录套用模板生成 DOCX，并回读核对所有输入字段。
 3. 通过 macOS Word AppleScript 或 Windows Word COM 导出 PDF。
 4. DOCX、PDF 均有效后创建 `专业-编号-YYYY-MM-DD_主题` 目录并刷新 JSON/HTML。
+
+生成 DOCX 时会根据致送单位、事由和需求内容的预计换行数，动态增减“以下空白”
+后的填充行；正文能够容纳在一页时，不会因模板固定空白把抄送、签字区推到第二页。
 
 新增功能必须通过 `serve_summary.py` 使用；直接双击静态 HTML 时不会尝试写入。
 macOS 或 Windows 需要安装 Microsoft Word，并在首次使用时允许系统自动化权限。

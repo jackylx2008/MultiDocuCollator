@@ -18,7 +18,7 @@ PLATFORM_ROOT_KEYS = {
     "Linux": "CLOUDSTATION_ROOT_LINUX",
 }
 PLATFORM_ROOT_DEFAULTS = {
-    "Windows": r"D:\CloudStaion",
+    "Windows": r"D:\CloudStation",
     "Darwin": "~/SynologyDrive/",
     "Linux": "~/CloudStation",
 }
