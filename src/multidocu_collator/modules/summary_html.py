@@ -168,6 +168,12 @@ HTML_TEMPLATE = r'''<!doctype html>
     th:nth-child(9),td:nth-child(9) { width:8%; text-align:center; }
     th:nth-child(10),td:nth-child(10) { width:9%; }
     .content { max-height:9.2em; overflow:auto; line-height:1.55; }
+    .content-editor textarea { width:100%; min-height:108px; padding:7px; resize:vertical; line-height:1.55; }
+    .content-actions { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+    .content-button { flex:1; min-width:76px; padding:6px 5px; border:1px solid #9eb5c7; border-radius:6px; color:#174d7a; background:#f4f9fc; cursor:pointer; font-size:12px; font-weight:700; }
+    .content-button:hover { color:white; background:var(--blue); }
+    .content-button:disabled { opacity:.55; cursor:not-allowed; }
+    .content-save-button { color:var(--ok); border-color:#9fcab3; background:#f0faf5; }
     .files { display:flex; flex-wrap:wrap; gap:5px; white-space:normal; }
     .file { display:inline-block; max-width:100%; padding:3px 6px; color:#174d7a; border:1px solid #bed3e4; border-radius:5px; background:#f3f9fd; text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .file:hover { color:white; background:var(--blue); }
@@ -197,8 +203,26 @@ HTML_TEMPLATE = r'''<!doctype html>
     .delete-button:hover { color:white; background:var(--bad); }
     .delete-button:disabled { opacity:.55; cursor:wait; }
     .empty { padding:40px; color:var(--muted); text-align:center; }
+    .ai-controls { display:flex; align-items:center; gap:7px; padding:4px 7px; border:1px solid var(--line); border-radius:8px; background:#f8fafb; }
+    .ai-state { color:var(--muted); font-size:12px; }
+    .ai-light { width:12px; height:12px; flex:0 0 12px; border-radius:50%; background:var(--bad); box-shadow:0 0 0 3px #a4333322; }
+    .ai-light.starting { background:#d69418; box-shadow:0 0 0 3px #d6941822; }
+    .ai-light.running { background:#20a35a; box-shadow:0 0 0 3px #20a35a2a; }
+    .ai-control-button { min-height:30px; padding:4px 9px; border:0; border-radius:6px; color:white; background:var(--ok); cursor:pointer; font-size:12px; font-weight:700; }
+    .ai-control-button.stop { background:var(--bad); }
+    .ai-control-button:disabled { opacity:.45; cursor:not-allowed; }
+    dialog { width:min(760px,calc(100vw - 32px)); padding:0; border:0; border-radius:12px; box-shadow:0 18px 60px #07152155; }
+    dialog::backdrop { background:#07152199; }
+    .dialog-head { padding:17px 20px; color:white; background:var(--navy); }
+    .dialog-head h2 { margin:0; font-size:19px; }
+    .dialog-body { padding:18px 20px; }
+    .dialog-note { margin:0 0 10px; color:var(--muted); font-size:13px; }
+    .dialog-body textarea { width:100%; min-height:260px; resize:vertical; line-height:1.65; }
+    .dialog-actions { display:flex; justify-content:flex-end; gap:9px; padding:0 20px 18px; }
+    .dialog-button { padding:8px 16px; border:1px solid #aab9c5; border-radius:7px; background:white; cursor:pointer; font-weight:700; }
+    .dialog-button.primary { color:white; border-color:var(--ok); background:var(--ok); }
     @media (max-width:1100px) { main{padding:10px}.metrics{grid-template-columns:1fr 1fr}.table-wrap{max-height:none} table{min-width:1200px} }
-    @media print { header,.metrics,.toolbar,.column-filter,.new-row,.delete-button{display:none}.table-wrap{max-height:none;overflow:visible;border:0} th{position:static} body{background:white} table{font-size:9px} }
+    @media print { header,.metrics,.toolbar,.column-filter,.new-row,.delete-button,.content-actions{display:none}.content-editor textarea{min-height:0;padding:0;border:0;resize:none}.table-wrap{max-height:none;overflow:visible;border:0} th{position:static} body{background:white} table{font-size:9px} }
   </style>
 </head>
 <body>
@@ -214,6 +238,12 @@ HTML_TEMPLATE = r'''<!doctype html>
       <input id="search" type="search" placeholder="搜索专业、编号、日期、致送单位、主题、需求内容……">
       <button id="refreshArchive" class="refresh-button" type="button" title="重新扫描实际资料目录并更新 JSON/HTML">重新扫描刷新</button>
       <button id="savePrintStatuses" class="refresh-button print-save-button" type="button" title="将本页所有打印标记保存到 JSON，并刷新 HTML">保存打印标记</button>
+      <div class="ai-controls" title="绿色表示已启动，红色表示未启动，黄色表示正在处理">
+        <span id="aiLight" class="ai-light" role="status" aria-label="本地 AI 未启动"></span>
+        <span id="aiState" class="ai-state">本地 AI：未启动</span>
+        <button id="startLocalAi" class="ai-control-button" type="button">启动本地 AI</button>
+        <button id="stopLocalAi" class="ai-control-button stop" type="button" disabled>关闭本地 AI</button>
+      </div>
       <span class="visible-count">当前显示 <b id="visible"></b> 条</span>
     </section>
     <div class="table-wrap">
@@ -230,6 +260,18 @@ HTML_TEMPLATE = r'''<!doctype html>
       <div id="empty" class="empty" hidden>没有符合当前条件的记录</div>
     </div>
   </main>
+  <dialog id="aiDialog">
+    <div class="dialog-head"><h2>AI 公文勘误版本</h2></div>
+    <div class="dialog-body">
+      <p id="aiDialogNote" class="dialog-note"></p>
+      <textarea id="aiRevisedContent" readonly aria-label="AI 修订后的需求内容"></textarea>
+    </div>
+    <div class="dialog-actions">
+      <button id="aiCancel" class="dialog-button" type="button">取消</button>
+      <button id="aiManualEdit" class="dialog-button" type="button">手动修改</button>
+      <button id="aiAccept" class="dialog-button primary" type="button">接受</button>
+    </div>
+  </dialog>
   <script id="summaryData" type="application/json">__SUMMARY_DATA__</script>
   <script>
     const data=JSON.parse(document.getElementById('summaryData').textContent);
@@ -245,6 +287,54 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('warnings').textContent=data.warning_count;
     data.disciplines.forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;$('disciplineFilter').append(option)});
     function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=esc(text);if(className)el.className=className;return el}
+    let aiAvailable=false,activeProofread=null,aiStartupTimer=null,aiStartupStartedAt=0;
+    function stopAiStartupTimer(){
+      if(aiStartupTimer!==null){clearInterval(aiStartupTimer);aiStartupTimer=null}
+      aiStartupStartedAt=0;$('startLocalAi').textContent='启动本地 AI';
+    }
+    function startAiStartupTimer(){
+      stopAiStartupTimer();aiStartupStartedAt=Date.now();
+      const update=()=>{const seconds=Math.floor((Date.now()-aiStartupStartedAt)/1000);$('aiState').textContent=`本地 AI：正在启动并加载模型… 已等待 ${seconds} 秒`;$('startLocalAi').textContent=`启动中 ${seconds} 秒`};
+      update();aiStartupTimer=setInterval(update,1000);
+    }
+    function applyAiStatus(result){
+      stopAiStartupTimer();aiAvailable=Boolean(result.available);$('aiState').textContent=result.message;$('aiState').title=`系统：${result.system} · 模型：${result.model}`;$('aiLight').className=`ai-light${aiAvailable?' running':''}`;$('aiLight').setAttribute('aria-label',aiAvailable?'本地 AI 已启动':'本地 AI 未启动');$('startLocalAi').disabled=aiAvailable;$('stopLocalAi').disabled=!aiAvailable||!result.managed;$('stopLocalAi').title=aiAvailable&&!result.managed?'外部启动的服务不能由本项目关闭':'';document.querySelectorAll('.ai-button').forEach(button=>{button.disabled=!aiAvailable});
+    }
+    async function checkLocalAi(){
+      if(!isLocalService()){$('aiState').textContent='本地 AI：请通过 serve_summary.py 打开';aiAvailable=false;return}
+      try{
+        const response=await fetch('/api/local-ai-status');const result=await response.json();
+        applyAiStatus(result);
+      }catch(error){applyAiStatus({available:false,managed:false,system:'Windows',model:'—',message:`本地 AI：${errorMessage(error)}`})}
+    }
+    async function controlLocalAi(action){
+      if(!isLocalService()){alert('本地 AI 控制需要通过 serve_summary.py 打开本页面。');return}
+      $('aiLight').className='ai-light starting';$('aiLight').setAttribute('aria-label',action==='start'?'本地 AI 正在启动':'本地 AI 正在关闭');if(action==='start'){startAiStartupTimer()}else{stopAiStartupTimer();$('aiState').textContent='本地 AI：正在关闭…'}$('startLocalAi').disabled=true;$('stopLocalAi').disabled=true;document.querySelectorAll('.ai-button').forEach(button=>{button.disabled=true});
+      try{
+        const response=await fetch(`/api/${action}-local-ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const result=await response.json();if(!response.ok)throw new Error(result.error||'本地 AI 操作失败');applyAiStatus(result);
+      }catch(error){alert(`本地 AI 操作失败：${errorMessage(error)}`);await checkLocalAi()}
+      finally{if(action==='start')stopAiStartupTimer()}
+    }
+    async function proofreadContent(row,editor,button){
+      if(!isLocalService()){alert('AI 勘误需要通过 serve_summary.py 打开本页面。');return}
+      const content=editor.value.trim();if(!content){alert('需求内容不能为空');return}
+      button.disabled=true;button.textContent='AI 勘误中…';
+      try{
+        const response=await fetch('/api/proofread-content',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requirement_content:content})});
+        const result=await response.json();if(!response.ok)throw new Error(result.error||'AI 勘误失败');
+        activeProofread={row,editor};$('aiRevisedContent').value=result.revised_content;$('aiRevisedContent').readOnly=true;$('aiDialogNote').textContent=`模型：${result.model}。请核对事实、数字和专有名词后再接受。`;$('aiDialog').showModal();
+      }catch(error){alert(`AI 勘误失败：${errorMessage(error)}`)}
+      finally{button.disabled=aiAvailable===false;button.textContent='AI 公文勘误'}
+    }
+    async function saveRecordContent(row,editor,button){
+      if(!isLocalService()){alert('更新 Word/PDF 需要通过 serve_summary.py 打开本页面。');return}
+      const content=editor.value.trim();if(!content){alert('需求内容不能为空');return}
+      button.disabled=true;button.textContent='正在更新 Word/PDF…';
+      try{
+        const response=await fetch('/api/update-record-content',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,record_id:row.record_id,requirement_content:content})});
+        const result=await response.json();if(!response.ok)throw new Error(result.error||'更新失败');location.reload();
+      }catch(error){alert(`更新需求内容失败：${errorMessage(error)}`);button.disabled=false;button.textContent='保存内容'}
+    }
     async function openDirectory(event,row){
       if(!isLocalService())return;
       event.preventDefault();
@@ -309,7 +399,8 @@ HTML_TEMPLATE = r'''<!doctype html>
         const tr=node('tr');
         [index+1,row.discipline,row.sequence_no,row.folder_date,row.recipient||'—'].forEach(value=>tr.append(node('td',value)));
         const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='打开对应资料目录';subjectLink.addEventListener('click',event=>openDirectory(event,row));subjectCell.append(subjectLink);tr.append(subjectCell);
-        const content=node('td');content.append(node('div',row.requirement_content||'—','content'));tr.append(content);
+        const content=node('td'),contentEditor=node('div',undefined,'content-editor'),contentInput=node('textarea');contentInput.value=row.requirement_content;contentInput.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求内容`);contentInput.addEventListener('input',()=>{row.requirement_content=contentInput.value});
+        const contentActions=node('div',undefined,'content-actions'),aiButton=node('button','AI 公文勘误','content-button ai-button'),contentSave=node('button','保存内容','content-button content-save-button');aiButton.type='button';contentSave.type='button';aiButton.disabled=aiAvailable===false;aiButton.addEventListener('click',()=>proofreadContent(row,contentInput,aiButton));contentSave.addEventListener('click',()=>saveRecordContent(row,contentInput,contentSave));contentActions.append(aiButton,contentSave);contentEditor.append(contentInput,contentActions);content.append(contentEditor);tr.append(content);
         const fileCell=node('td'),files=node('div',undefined,'files');
         row.files.forEach(file=>{const a=node('a',file.role_label,`file${file.kind_class?' '+file.kind_class:''}`);a.href=file.href;a.title=`${file.name}\n文件类型：${file.type_label}\n左键复制，可在其他位置粘贴`;a.addEventListener('click',event=>copyFile(event,file,a));files.append(a)});fileCell.append(files);tr.append(fileCell);
         const printCell=node('td'),printSelect=node('select',undefined,'print-select');
@@ -360,7 +451,12 @@ HTML_TEMPLATE = r'''<!doctype html>
     }
     $('refreshArchive').addEventListener('click',event=>refreshArchive(event.currentTarget));
     $('savePrintStatuses').addEventListener('click',event=>savePrintStatuses(event.currentTarget));
-    ['search','disciplineFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();
+    $('startLocalAi').addEventListener('click',()=>controlLocalAi('start'));
+    $('stopLocalAi').addEventListener('click',()=>controlLocalAi('stop'));
+    $('aiCancel').addEventListener('click',()=>{$('aiDialog').close();activeProofread=null});
+    $('aiManualEdit').addEventListener('click',()=>{$('aiRevisedContent').readOnly=false;$('aiRevisedContent').focus();$('aiDialogNote').textContent='已进入手动修改模式；修改完成后点击“接受”。'});
+    $('aiAccept').addEventListener('click',()=>{const revised=$('aiRevisedContent').value.trim();if(!activeProofread||!revised){alert('修订内容不能为空');return}if(revised.length>4000){alert('修订内容不能超过 4000 个字符');return}activeProofread.row.requirement_content=revised;activeProofread.editor.value=revised;$('aiDialog').close();activeProofread=null});
+    ['search','disciplineFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();requestAnimationFrame(()=>{const tableWrap=document.querySelector('.table-wrap');tableWrap.scrollTop=tableWrap.scrollHeight});checkLocalAi();
   </script>
 </body>
 </html>

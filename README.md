@@ -136,13 +136,61 @@ python serve_summary.py
 顶部的“保存打印标记”，会写回正式 JSON 并同步刷新 HTML；重新扫描实际目录时会
 保留已保存的人工标记。
 
+每条既有记录的“需求内容”可直接编辑，但服务端只接受记录 ID、页面数据版本和新
+正文，不允许通过该接口修改编号、日期、致送单位、事由或目录名。点击“保存内容”
+后，程序先在同目录临时区修改原 DOCX 并回读校验，再调用 Microsoft Word 重新导出
+PDF；两份文件全部生成成功后才替换原文件并刷新 JSON/HTML。失败时恢复旧文件。
+
+## Windows 11 本地 AI 公文勘误
+
+页面的“AI 公文勘误”复用 `LocalAiOcrFile` 已部署的 llama.cpp、CUDA 和本地 GGUF
+模型。默认只允许访问 `http://127.0.0.1:8080/v1`、`localhost` 或 IPv6 回环地址，
+内容不会发送到外部服务。
+
+`common.env` 需要配置：
+
+```dotenv
+LLAMACPP_BASE_URL=http://127.0.0.1:8080/v1
+LLAMACPP_MODEL=Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf
+LLAMACPP_AUTOSTART=true
+LLAMACPP_SERVER_PATH=D:\llama-cpp-cu12\llama-server.exe
+LLAMACPP_MODEL_PATH=C:\path\to\Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf
+LLAMACPP_MMPROJ_PATH=C:\path\to\mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf
+LLAMACPP_N_GPU_LAYERS=999
+```
+
+重新双击 `build_archive.cmd` 后，页面会依次检查 `/health` 和 `/v1/models`，顶部
+用状态灯显示运行情况：红色表示未启动、黄色表示正在启动或关闭、绿色表示已经
+就绪。点击“启动本地 AI”后，如果 8080 服务不可用且
+`LLAMACPP_AUTOSTART=true`，程序会在后台启动 `llama-server.exe`、加载模型并等待
+健康检查通过；点击“关闭本地 AI”会释放本项目加载的模型和显存。
+
+`serve_summary.py` 退出时也会关闭由本项目启动的进程。如果连接的是外部已经运行
+的服务，状态灯仍显示绿色，但“关闭本地 AI”不可用，避免误关其他程序的服务。
+
+启动日志位于项目的 `log/llama_server.out.log` 和
+`log/llama_server.err.log`。模型首次加载可能需要一些时间，工具栏会显示
+“正在启动并加载模型”；就绪后才启用“AI 公文勘误”按钮。
+
+点击某行“AI 公文勘误”后，模型只修正错别字、标点、病句和公文表达，不应更改
+事实、数字、专有名词或责任主体。修订版显示在弹窗中：
+
+- “手动修改”：解除只读，可继续人工调整 AI 版本。
+- “接受”：关闭弹窗并把版本回填到当前表格，尚未修改磁盘文件。
+- “保存内容”：最终更新 Word、重新出具 PDF，并刷新 JSON/HTML。
+
+AI 输出仍需人工核对，特别是金额、日期、设备参数、单位名称和责任边界。
+
 HTML 和 JSON 只保存相对于资料根目录的路径。服务在运行时通过当前平台的
 `CLOUDSTATION_ROOT` 解析实际位置，并执行路径越界检查，因此同一份成果可以在
 Windows 和 macOS 的不同群晖根目录下使用。直接双击静态 HTML 时，主题链接退化
 为浏览器可访问的相对目录链接。
 
 表格末行始终保留新增表单，可填写专业、编号、目录日期、致送单位、主题和需求
-内容。编号会按所选专业取现有最大编号加一并补足三位，也可手动覆盖；日期默认
+内容。页面首次打开时会自动滚动到表格底部，直接显示最后一条记录和新增表单。
+本地 AI 未启动时显示红灯；点击“启动本地 AI”后显示黄灯，并在状态文字和按钮上
+持续读秒，模型可用后转为绿灯；点击关闭后恢复红灯。
+编号会按所选专业取现有最大编号加一并补足三位，也可手动覆盖；日期默认
 本机当天且可修改。点击“保存”后，服务会：
 
 1. 校验页面数据版本、重复编号和 Windows/macOS 通用文件名规则。

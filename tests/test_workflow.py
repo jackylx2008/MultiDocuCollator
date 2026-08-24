@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -21,7 +21,10 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from multidocu_collator.modules.docx_parser import parse_docx
-from multidocu_collator.modules.document_generator import generate_contact_docx
+from multidocu_collator.modules.document_generator import (
+    generate_contact_docx,
+    update_contact_content,
+)
 from multidocu_collator.modules.desktop import (
     copy_file_to_clipboard,
     open_directory,
@@ -38,11 +41,18 @@ from multidocu_collator.flows.create_record_flow import (
 from multidocu_collator.flows.delete_record_flow import delete_record
 from multidocu_collator.flows.summary_server_flow import _handler_class
 from multidocu_collator.flows.update_print_status_flow import update_print_statuses
+from multidocu_collator.flows.update_record_content_flow import update_record_content
 from multidocu_collator.config_loader import expand_env, select_cloudstation_root
 from multidocu_collator.modules.repository import build_dataset
 from multidocu_collator.modules.scanner import scan_data_root
 from multidocu_collator.modules.summary_html import build_summary_view, export_summary_html
 from multidocu_collator.modules.validation import validate_dataset, validate_summary_html
+from multidocu_collator.modules.local_ai import (
+    _ensure_server,
+    local_ai_status,
+    proofread_official_content,
+    shutdown_local_ai,
+)
 
 
 DOCUMENT_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -214,8 +224,22 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn('id="savePrintStatuses"', html)
             self.assertIn("/api/save-print-status", html)
             self.assertIn("savePrintStatuses(event.currentTarget)", html)
+            self.assertIn("/api/update-record-content", html)
+            self.assertIn("/api/proofread-content", html)
+            self.assertIn("/api/local-ai-status", html)
+            self.assertIn("/api/${action}-local-ai", html)
+            self.assertIn('id="aiLight"', html)
+            self.assertIn('id="startLocalAi"', html)
+            self.assertIn('id="stopLocalAi"', html)
+            self.assertIn("aiStartupTimer=setInterval(update,1000)", html)
+            self.assertIn("启动中 ${seconds} 秒", html)
+            self.assertIn('id="aiDialog"', html)
+            self.assertIn("AI 公文勘误", html)
+            self.assertIn("手动修改", html)
+            self.assertIn("接受", html)
             self.assertIn("delete-button", html)
             self.assertIn("buildNewRow()", html)
+            self.assertIn("tableWrap.scrollTop=tableWrap.scrollHeight", html)
             self.assertIn("Word 正在导出", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
             self.assertEqual(validate_summary_html(html_path, data)["errors"], [])
@@ -272,6 +296,88 @@ class WorkflowTests(unittest.TestCase):
                     context,
                     {"dataset_revision": 3, "statuses": {"record-1": "否"}},
                 )
+
+    def test_local_ai_status_and_proofreading(self) -> None:
+        context = AppContext(
+            project_root=PROJECT_ROOT,
+            data_root=PROJECT_ROOT,
+            json_name="data.json",
+            html_name="summary.html",
+        )
+        with patch(
+            "multidocu_collator.modules.local_ai._healthcheck",
+            return_value=[context.local_ai_model],
+        ):
+            status = local_ai_status(context, system_name="Windows")
+        self.assertTrue(status["available"])
+        with patch(
+            "multidocu_collator.modules.local_ai._healthcheck",
+            return_value=["other-model.gguf"],
+        ):
+            missing_status = local_ai_status(context, system_name="Windows")
+        self.assertFalse(missing_status["available"])
+        with patch(
+            "multidocu_collator.modules.local_ai._ensure_server",
+            return_value=[context.local_ai_model],
+        ), patch(
+            "multidocu_collator.modules.local_ai._request_json",
+            return_value={
+                "choices": [
+                    {"message": {"content": "请相关单位复核并书面回复。"}}
+                ]
+            },
+        ) as request:
+            revised = proofread_official_content(
+                "请相关单位复合并书面回复。",
+                context=context,
+                system_name="Windows",
+            )
+        self.assertEqual(revised, "请相关单位复核并书面回复。")
+        self.assertFalse(request.call_args.kwargs["payload"]["stream"])
+        with self.assertRaisesRegex(RuntimeError, "仅支持 Windows"):
+            proofread_official_content(
+                "测试",
+                context=context,
+                system_name="Linux",
+            )
+
+    def test_llamacpp_service_autostarts_and_is_managed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            server = root / "llama-server.exe"
+            model = root / "model.gguf"
+            mmproj = root / "mmproj.gguf"
+            for path in (server, model, mmproj):
+                path.write_bytes(b"test")
+            context = AppContext(
+                project_root=root,
+                data_root=root,
+                json_name="data.json",
+                html_name="summary.html",
+                local_ai_model="model.gguf",
+                local_ai_server_path=str(server),
+                local_ai_model_path=str(model),
+                local_ai_mmproj_path=str(mmproj),
+                local_ai_startup_timeout_sec=2,
+                local_ai_startup_poll_interval_sec=0.01,
+                local_ai_stdout_log_path=str(root / "stdout.log"),
+                local_ai_stderr_log_path=str(root / "stderr.log"),
+            )
+            process = MagicMock()
+            process.poll.return_value = None
+            with patch(
+                "multidocu_collator.modules.local_ai._healthcheck",
+                side_effect=[RuntimeError("未启动"), RuntimeError("未启动"), ["model.gguf"]],
+            ), patch(
+                "multidocu_collator.modules.local_ai.subprocess.Popen",
+                return_value=process,
+            ) as popen:
+                self.assertEqual(_ensure_server(context), ["model.gguf"])
+            command = popen.call_args.args[0]
+            self.assertEqual(command[0], str(server))
+            self.assertIn("--mmproj", command)
+            shutdown_local_ai()
+            process.terminate.assert_called_once()
 
     def test_resolves_only_relative_directory_inside_data_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -353,6 +459,47 @@ class WorkflowTests(unittest.TestCase):
             try:
                 with urllib.request.urlopen(base + "/", timeout=3) as response:
                     self.assertIn(b"summary", response.read())
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.local_ai_status",
+                    return_value={
+                        "supported": True,
+                        "available": True,
+                        "system": "Windows",
+                        "model": context.local_ai_model,
+                        "message": "已就绪",
+                    },
+                ) as status_checker:
+                    with urllib.request.urlopen(
+                        base + "/api/local-ai-status", timeout=3
+                    ) as response:
+                        self.assertEqual(response.status, 200)
+                    status_checker.assert_called_once_with(context)
+                start_request = urllib.request.Request(
+                    base + "/api/start-local-ai",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.start_local_ai",
+                    return_value={"available": True, "managed": True},
+                ) as starter:
+                    with urllib.request.urlopen(start_request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    starter.assert_called_once_with(context)
+                stop_request = urllib.request.Request(
+                    base + "/api/stop-local-ai",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.stop_local_ai",
+                    return_value={"available": False, "managed": False},
+                ) as stopper:
+                    with urllib.request.urlopen(stop_request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    stopper.assert_called_once_with(context)
                 request = urllib.request.Request(
                     base + "/api/open-path",
                     data=json.dumps({"path": folder.name}).encode("utf-8"),
@@ -419,6 +566,42 @@ class WorkflowTests(unittest.TestCase):
                     with urllib.request.urlopen(print_request, timeout=3) as response:
                         self.assertEqual(response.status, 200)
                     updater.assert_called_once_with(context, print_payload)
+                content_payload = {
+                    "dataset_revision": 1,
+                    "record_id": "id",
+                    "requirement_content": "更新内容",
+                }
+                content_request = urllib.request.Request(
+                    base + "/api/update-record-content",
+                    data=json.dumps(content_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.update_record_content",
+                    return_value={"ok": True, "changed": True},
+                ) as content_updater:
+                    with urllib.request.urlopen(content_request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    content_updater.assert_called_once_with(context, content_payload)
+                proofread_request = urllib.request.Request(
+                    base + "/api/proofread-content",
+                    data=json.dumps(
+                        {"requirement_content": "原始内容"}, ensure_ascii=False
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.proofread_official_content",
+                    return_value="修订内容",
+                ) as proofreader:
+                    with urllib.request.urlopen(proofread_request, timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+                    proofreader.assert_called_once_with(
+                        "原始内容",
+                        context=context,
+                    )
                 create_request = urllib.request.Request(
                     base + "/api/create-record",
                     data=json.dumps({"dataset_revision": 1}).encode("utf-8"),
@@ -542,6 +725,24 @@ class WorkflowTests(unittest.TestCase):
             with ZipFile(output) as archive:
                 self.assertEqual(archive.read("custom/unchanged.bin"), b"unchanged")
 
+            updated_output = root / "updated-output.docx"
+            update_contact_content(
+                output,
+                updated_output,
+                requirement_content="更新后的第一项需求\n更新后的第二项需求",
+            )
+            updated_fields = parse_docx(updated_output)
+            self.assertEqual(updated_fields.document_no, fields.document_no)
+            self.assertEqual(updated_fields.document_date, fields.document_date)
+            self.assertEqual(updated_fields.recipient, fields.recipient)
+            self.assertEqual(updated_fields.subject, fields.subject)
+            self.assertEqual(
+                updated_fields.requirement_content,
+                "更新后的第一项需求\n更新后的第二项需求",
+            )
+            with ZipFile(updated_output) as archive:
+                self.assertEqual(archive.read("custom/unchanged.bin"), b"unchanged")
+
             long_output = root / "long-output.docx"
             long_line = (
                 "请相关单位根据现场情况完成设备、管线及控制系统调整，并在实施后提交完整记录和验收资料。"
@@ -635,6 +836,100 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(command[-1], WINDOWS_SCRIPT)
             self.assertEqual(environment["MULTIDOCU_INPUT_PATH"], str(docx.resolve()))
             self.assertEqual(environment["MULTIDOCU_OUTPUT_PATH"], str(pdf.resolve()))
+
+    def test_updates_only_existing_content_and_reissues_pdf(self) -> None:
+        from datetime import date
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root / "给排水-001-2026-08-24_测试事项"
+            folder.mkdir()
+            template = root / "template.docx"
+            word = folder / "需求工作联系单（给排水-001）_测试事项.docx"
+            pdf = folder / "需求工作联系单（给排水-001）_测试事项.pdf"
+            make_template_docx(template)
+            generate_contact_docx(
+                template,
+                word,
+                document_no="给排水-001",
+                document_date=date(2026, 8, 24),
+                recipient="测试单位",
+                subject="测试事项",
+                requirement_content="原需求内容",
+            )
+            pdf.write_bytes(b"%PDF-" + b"old" * 40)
+            data = {
+                "schema_version": 1,
+                "dataset_revision": 5,
+                "records": [
+                    {
+                        "record_id": "record-1",
+                        "需求内容": "原需求内容",
+                        "files": [
+                            {
+                                "role": "source_word",
+                                "path": f"{folder.name}/{word.name}",
+                            },
+                            {
+                                "role": "issued_pdf",
+                                "path": f"{folder.name}/{pdf.name}",
+                            },
+                        ],
+                    }
+                ],
+            }
+            (root / "data.json").write_text(
+                json.dumps(data, ensure_ascii=False), encoding="utf-8"
+            )
+            context = AppContext(
+                project_root=root,
+                data_root=root,
+                json_name="data.json",
+                html_name="summary.html",
+            )
+
+            def export_pdf(_: Path, output: Path) -> Path:
+                output.write_bytes(b"%PDF-" + b"new" * 40)
+                return output
+
+            with patch(
+                "multidocu_collator.flows.update_record_content_flow.export_pdf_with_word",
+                side_effect=export_pdf,
+            ), patch(
+                "multidocu_collator.flows.update_record_content_flow.run_build_archive",
+                side_effect=[RuntimeError("刷新失败"), {"changed": False}],
+            ):
+                with self.assertRaisesRegex(RuntimeError, "刷新失败"):
+                    update_record_content(
+                        context,
+                        {
+                            "dataset_revision": 5,
+                            "record_id": "record-1",
+                            "requirement_content": "不应保留的内容",
+                        },
+                    )
+            self.assertEqual(parse_docx(word).requirement_content, "原需求内容")
+            self.assertEqual(pdf.read_bytes(), b"%PDF-" + b"old" * 40)
+
+            with patch(
+                "multidocu_collator.flows.update_record_content_flow.export_pdf_with_word",
+                side_effect=export_pdf,
+            ), patch(
+                "multidocu_collator.flows.update_record_content_flow.run_build_archive",
+                return_value={"changed": True},
+            ) as rebuild:
+                result = update_record_content(
+                    context,
+                    {
+                        "dataset_revision": 5,
+                        "record_id": "record-1",
+                        "requirement_content": "修订后的需求内容",
+                    },
+                )
+            self.assertTrue(result["changed"])
+            self.assertEqual(parse_docx(word).requirement_content, "修订后的需求内容")
+            self.assertEqual(pdf.read_bytes(), b"%PDF-" + b"new" * 40)
+            rebuild.assert_called_once_with(context)
 
     def test_create_record_commits_only_complete_docx_and_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

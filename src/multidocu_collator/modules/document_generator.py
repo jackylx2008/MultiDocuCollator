@@ -306,3 +306,60 @@ def generate_contact_docx(
     if mismatches:
         raise ValueError("生成的 DOCX 字段校验失败: " + "、".join(mismatches))
     return output
+
+
+def update_contact_content(
+    source_path: Path, output: Path, *, requirement_content: str
+) -> Path:
+    """只替换既有联系单的需求正文，其他业务字段和 DOCX 部件保持不变。"""
+    if not source_path.is_file():
+        raise FileNotFoundError(f"联系单 Word 不存在: {source_path}")
+    original_fields = parse_docx(source_path)
+    try:
+        with ZipFile(source_path) as source:
+            original_document_xml = source.read("word/document.xml")
+            document = _parse_preserving_namespaces(original_document_xml)
+            line_delta = _replace_content(document, requirement_content)
+            overflow_lines = _resize_filler_paragraphs(document, line_delta)
+            _shrink_body_row_minimum(document, overflow_lines)
+            document_xml = _serialize_preserving_root(document, original_document_xml)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                prefix=f".{output.name}.",
+                suffix=".tmp",
+                dir=output.parent,
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+            try:
+                with ZipFile(temporary, "w", ZIP_DEFLATED) as target:
+                    for info in source.infolist():
+                        target.writestr(
+                            info,
+                            document_xml
+                            if info.filename == "word/document.xml"
+                            else source.read(info),
+                        )
+                temporary.replace(output)
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+    except (BadZipFile, KeyError, ET.ParseError, StopIteration) as exc:
+        raise ValueError(f"无法更新联系单 Word: {exc}") from exc
+
+    updated_fields = parse_docx(output)
+    unchanged = {
+        "资料编号": (updated_fields.document_no, original_fields.document_no),
+        "日期": (updated_fields.document_date, original_fields.document_date),
+        "致送单位": (updated_fields.recipient, original_fields.recipient),
+        "事由": (updated_fields.subject, original_fields.subject),
+        "工程名称": (updated_fields.project_name, original_fields.project_name),
+    }
+    changed_fields = [
+        name for name, (actual, original) in unchanged.items() if actual != original
+    ]
+    if changed_fields:
+        raise ValueError("更新 DOCX 时意外修改了字段: " + "、".join(changed_fields))
+    if updated_fields.requirement_content != requirement_content.strip():
+        raise ValueError("更新后的 DOCX 需求内容回读校验失败")
+    return output

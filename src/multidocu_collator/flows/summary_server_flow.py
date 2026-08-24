@@ -19,11 +19,19 @@ from ..modules.desktop import (
     resolve_relative_directory,
     resolve_relative_file,
 )
+from ..modules.local_ai import (
+    local_ai_status,
+    proofread_official_content,
+    shutdown_local_ai,
+    start_local_ai,
+    stop_local_ai,
+)
 from .build_archive_flow import run_build_archive
 from .create_record_flow import create_record
 from .delete_record_flow import delete_record
 from .mutation_lock import RECORD_MUTATION_LOCK
 from .update_print_status_flow import update_print_statuses
+from .update_record_content_flow import update_record_content
 
 
 logger = get_logger(__name__)
@@ -43,7 +51,12 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
             super().end_headers()
 
         def do_GET(self) -> None:  # noqa: N802 - http.server 固定接口名
-            if urlsplit(self.path).path == "/":
+            route = urlsplit(self.path).path
+            if route == "/api/local-ai-status":
+                result = local_ai_status(context)
+                self._send_json(HTTPStatus.OK, result)
+                return
+            if route == "/":
                 self.path = "/" + quote(html_name)
             super().do_GET()
 
@@ -56,6 +69,10 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 "/api/delete-record",
                 "/api/refresh-archive",
                 "/api/save-print-status",
+                "/api/update-record-content",
+                "/api/proofread-content",
+                "/api/start-local-ai",
+                "/api/stop-local-ai",
             }:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
@@ -76,6 +93,31 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     result = update_print_statuses(context, payload)
                     logger.info("已保存 %d 条需求单打印标记", result["changed"])
                     self._send_json(HTTPStatus.OK, result)
+                    return
+                if route == "/api/update-record-content":
+                    result = update_record_content(context, payload)
+                    logger.info("已更新联系单需求内容: %s", payload.get("record_id"))
+                    self._send_json(HTTPStatus.OK, result)
+                    return
+                if route == "/api/proofread-content":
+                    revised = proofread_official_content(
+                        str(payload.get("requirement_content") or ""),
+                        context=context,
+                    )
+                    self._send_json(
+                        HTTPStatus.OK,
+                        {
+                            "ok": True,
+                            "revised_content": revised,
+                            "model": context.local_ai_model,
+                        },
+                    )
+                    return
+                if route == "/api/start-local-ai":
+                    self._send_json(HTTPStatus.OK, start_local_ai(context))
+                    return
+                if route == "/api/stop-local-ai":
+                    self._send_json(HTTPStatus.OK, stop_local_ai(context))
                     return
                 if route == "/api/create-record":
                     result = create_record(context, payload)
@@ -143,4 +185,5 @@ def run_summary_server(
         logger.info("正在停止本地汇总服务")
     finally:
         server.server_close()
+        shutdown_local_ai()
     return url

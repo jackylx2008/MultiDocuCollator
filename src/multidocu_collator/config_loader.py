@@ -117,10 +117,46 @@ def load_settings(project_root: Path) -> dict[str, Any]:
     flow = (data.get("flows") or {}).get("build_archive") or {}
     configured_data_root = str(flow.get("data_root") or "")
     data_root = os.environ.get("HOTEL_REQUIREMENTS_ROOT", "").strip()
+    def local_path(name: str, default: str) -> str:
+        value = os.environ.get(name, default).strip()
+        path = Path(value).expanduser()
+        return str(path if path.is_absolute() else project_root / path)
+
     return {
         "log_level": str(app.get("log_level") or "INFO"),
         "data_root": str(Path(data_root or configured_data_root).expanduser()),
         "json_name": str(flow.get("json_name") or DEFAULT_JSON_NAME),
         "html_name": str(flow.get("html_name") or DEFAULT_HTML_NAME),
         "template_name": str(flow.get("template_name") or DEFAULT_TEMPLATE_NAME),
+        "local_ai_base_url": os.environ.get(
+            "LLAMACPP_BASE_URL", "http://127.0.0.1:8080/v1"
+        ).strip(),
+        "local_ai_model": os.environ.get(
+            "LLAMACPP_MODEL", "Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf"
+        ).strip(),
+        "local_ai_autostart": os.environ.get(
+            "LLAMACPP_AUTOSTART", "true"
+        ).strip().lower() in {"1", "true", "yes", "on"},
+        "local_ai_server_path": os.environ.get("LLAMACPP_SERVER_PATH", "").strip(),
+        "local_ai_model_path": os.environ.get("LLAMACPP_MODEL_PATH", "").strip(),
+        "local_ai_mmproj_path": os.environ.get("LLAMACPP_MMPROJ_PATH", "").strip(),
+        "local_ai_n_gpu_layers": int(os.environ.get("LLAMACPP_N_GPU_LAYERS", "999")),
+        "local_ai_startup_timeout_sec": int(
+            os.environ.get("LLAMACPP_STARTUP_TIMEOUT_SEC", "180")
+        ),
+        "local_ai_startup_poll_interval_sec": float(
+            os.environ.get("LLAMACPP_STARTUP_POLL_INTERVAL_SEC", "1")
+        ),
+        "local_ai_request_timeout_sec": int(
+            os.environ.get("LLAMACPP_TIMEOUT_SEC", "180")
+        ),
+        "local_ai_stdout_log_path": local_path(
+            "LLAMACPP_STDOUT_LOG_PATH", "log/llama_server.out.log"
+        ),
+        "local_ai_stderr_log_path": local_path(
+            "LLAMACPP_STDERR_LOG_PATH", "log/llama_server.err.log"
+        ),
+        "local_ai_extra_dll_dirs": os.environ.get(
+            "LLAMACPP_EXTRA_DLL_DIRS", ""
+        ).strip(),
     }
