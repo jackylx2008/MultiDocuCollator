@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+from difflib import SequenceMatcher
 import json
 import os
 import platform
@@ -339,8 +340,11 @@ def proofread_official_content(
                 {
                     "role": "system",
                     "content": (
-                        "你是严谨的中文公文校对员。只修正错别字、标点、病句和不规范公文表达；"
-                        "不得改变事实、数字、专有名词、责任主体或新增原文没有的信息。"
+                        "你是严谨的中文公文编辑。请在忠实保留原意的前提下进行公文规范化修订："
+                        "修正错别字、标点和病句；将口语化、重复、含混或冗长表达改为准确、简洁、"
+                        "庄重的公文用语；优化句式、语序和逻辑衔接；统一术语及规范表达。"
+                        "允许为提升公文质量重写句式，但不得改变、增加或删减任何事实、数字、日期、"
+                        "计量单位、专有名词、责任主体、具体要求或时限。"
                         "只输出修订后的正文，不要解释、标题、引号或 Markdown。"
                     ),
                 },
@@ -364,6 +368,39 @@ def proofread_official_content(
     if len(revised) > 4000:
         raise RuntimeError("本地 AI 返回内容超过 4000 个字符，请缩短原文后重试")
     return revised
+
+
+def build_text_comparison(
+    original: str, revised: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """生成原文与修订稿的逐字差异片段，供 HTML 对照高亮。"""
+    original_segments: list[dict[str, Any]] = []
+    revised_segments: list[dict[str, Any]] = []
+
+    def append_segment(
+        segments: list[dict[str, Any]], text: str, changed: bool
+    ) -> None:
+        if not text:
+            return
+        if segments and segments[-1]["changed"] == changed:
+            segments[-1]["text"] += text
+        else:
+            segments.append({"text": text, "changed": changed})
+
+    matcher = SequenceMatcher(None, original, revised, autojunk=False)
+    for tag, original_start, original_end, revised_start, revised_end in matcher.get_opcodes():
+        changed = tag != "equal"
+        append_segment(
+            original_segments,
+            original[original_start:original_end],
+            changed,
+        )
+        append_segment(
+            revised_segments,
+            revised[revised_start:revised_end],
+            changed,
+        )
+    return original_segments, revised_segments
 
 
 atexit.register(shutdown_local_ai)

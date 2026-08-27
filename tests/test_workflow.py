@@ -49,6 +49,7 @@ from multidocu_collator.modules.summary_html import build_summary_view, export_s
 from multidocu_collator.modules.validation import validate_dataset, validate_summary_html
 from multidocu_collator.modules.local_ai import (
     _ensure_server,
+    build_text_comparison,
     local_ai_status,
     proofread_official_content,
     shutdown_local_ai,
@@ -234,6 +235,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("aiStartupTimer=setInterval(update,1000)", html)
             self.assertIn("启动中 ${seconds} 秒", html)
             self.assertIn('id="aiDialog"', html)
+            self.assertIn('id="aiOriginalContent"', html)
+            self.assertIn('class="comparison-grid"', html)
+            self.assertIn("ai-change", html)
             self.assertIn("AI 公文勘误", html)
             self.assertIn("手动修改", html)
             self.assertIn("接受", html)
@@ -243,6 +247,43 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("Word 正在导出", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
             self.assertEqual(validate_summary_html(html_path, data)["errors"], [])
+
+    def test_scanner_skips_unreadable_file_and_records_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root / "暖通空调-014-2026-08-26_关于空调的事宜"
+            folder.mkdir()
+            word = folder / "需求工作联系单（暖通空调-014）_关于空调的事宜.docx"
+            make_docx(word)
+            pdf = folder / "需求工作联系单（暖通空调-014）_关于空调的事宜.pdf"
+            pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+            backup = folder / "A21_002-B2层平面图-A0+1_BIAD.bak"
+            backup.write_bytes(b"locked backup")
+
+            def hash_or_deny(path: Path) -> str:
+                if path == backup:
+                    raise PermissionError(13, "Permission denied", str(path))
+                return "test-hash"
+
+            with patch(
+                "multidocu_collator.modules.scanner.sha256_file",
+                side_effect=hash_or_deny,
+            ):
+                records, unmatched, ignored = scan_data_root(root)
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(unmatched, [])
+            self.assertEqual(ignored, [])
+            self.assertNotIn(
+                backup.name,
+                {item["name"] for item in records[0]["files"]},
+            )
+            self.assertTrue(
+                any(
+                    backup.name in warning and "没有读取权限" in warning
+                    for warning in records[0]["warnings"]
+                )
+            )
 
     def test_updates_print_status_and_rejects_stale_page(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -334,6 +375,22 @@ class WorkflowTests(unittest.TestCase):
             )
         self.assertEqual(revised, "请相关单位复核并书面回复。")
         self.assertFalse(request.call_args.kwargs["payload"]["stream"])
+        system_prompt = request.call_args.kwargs["payload"]["messages"][0]["content"]
+        self.assertIn("优化句式、语序和逻辑衔接", system_prompt)
+        self.assertIn("准确、简洁、庄重的公文用语", system_prompt)
+        original_segments, revised_segments = build_text_comparison(
+            "请相关单位复合并回复。", "请相关单位复核并书面回复。"
+        )
+        self.assertEqual(
+            "".join(segment["text"] for segment in original_segments),
+            "请相关单位复合并回复。",
+        )
+        self.assertEqual(
+            "".join(segment["text"] for segment in revised_segments),
+            "请相关单位复核并书面回复。",
+        )
+        self.assertTrue(any(segment["changed"] for segment in original_segments))
+        self.assertTrue(any(segment["changed"] for segment in revised_segments))
         with self.assertRaisesRegex(RuntimeError, "仅支持 Windows"):
             proofread_official_content(
                 "测试",
@@ -598,6 +655,10 @@ class WorkflowTests(unittest.TestCase):
                 ) as proofreader:
                     with urllib.request.urlopen(proofread_request, timeout=3) as response:
                         self.assertEqual(response.status, 200)
+                        proofread_result = json.load(response)
+                    self.assertEqual(proofread_result["revised_content"], "修订内容")
+                    self.assertTrue(proofread_result["original_segments"])
+                    self.assertTrue(proofread_result["revised_segments"])
                     proofreader.assert_called_once_with(
                         "原始内容",
                         context=context,

@@ -61,6 +61,12 @@ def _choose_word(
     for word in words:
         try:
             parsed.append((word, parse_docx(word)))
+        except PermissionError:
+            warnings.append(f"无法读取 Word 文件“{word.name}”：没有读取权限")
+        except OSError as exc:
+            warnings.append(
+                f"无法读取 Word 文件“{word.name}”：{type(exc).__name__}"
+            )
         except ValueError as exc:
             warnings.append(str(exc))
     matching = [item for item in parsed if item[1].document_no == expected_code]
@@ -87,6 +93,19 @@ def _record(directory: Path, root: Path, match: re.Match[str]) -> dict[str, Any]
     ]
     words = [path for path in files if path.suffix.lower() == ".docx"]
     selected_word, word, warnings = _choose_word(words, expected_code)
+    file_items: list[dict[str, Any]] = []
+    for path in files:
+        try:
+            file_items.append(_file_item(path, root))
+        except PermissionError:
+            warnings.append(
+                f"资料文件“{relative_posix(path, root)}”没有读取权限，已跳过"
+            )
+        except OSError as exc:
+            warnings.append(
+                f"资料文件“{relative_posix(path, root)}”读取失败，已跳过"
+                f"（{type(exc).__name__}）"
+            )
     if word.document_no and word.document_no != expected_code:
         warnings.append(
             f"资料编号不一致：目录为“{expected_code}”，Word 为“{word.document_no}”"
@@ -99,7 +118,7 @@ def _record(directory: Path, root: Path, match: re.Match[str]) -> dict[str, Any]
         warnings.append(
             f"主题不一致：目录为“{subject}”，Word 为“{word.subject}”"
         )
-    roles = [_file_role(path) for path in files]
+    roles = [str(item["role"]) for item in file_items]
     if "issued_pdf" not in roles and "signed_scan" not in roles:
         warnings.append("缺少联系单 PDF 或扫描件")
     if not word.requirement_content:
@@ -130,7 +149,7 @@ def _record(directory: Path, root: Path, match: re.Match[str]) -> dict[str, Any]
             "recipient": word.recipient,
             "subject": word.subject,
         },
-        "files": [_file_item(path, root) for path in files],
+        "files": file_items,
         "status": status,
         "warnings": warnings,
     }

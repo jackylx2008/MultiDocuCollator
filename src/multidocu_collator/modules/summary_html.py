@@ -211,17 +211,23 @@ HTML_TEMPLATE = r'''<!doctype html>
     .ai-control-button { min-height:30px; padding:4px 9px; border:0; border-radius:6px; color:white; background:var(--ok); cursor:pointer; font-size:12px; font-weight:700; }
     .ai-control-button.stop { background:var(--bad); }
     .ai-control-button:disabled { opacity:.45; cursor:not-allowed; }
-    dialog { width:min(760px,calc(100vw - 32px)); padding:0; border:0; border-radius:12px; box-shadow:0 18px 60px #07152155; }
+    dialog { width:min(1180px,calc(100vw - 32px)); padding:0; border:0; border-radius:12px; box-shadow:0 18px 60px #07152155; }
     dialog::backdrop { background:#07152199; }
     .dialog-head { padding:17px 20px; color:white; background:var(--navy); }
     .dialog-head h2 { margin:0; font-size:19px; }
     .dialog-body { padding:18px 20px; }
     .dialog-note { margin:0 0 10px; color:var(--muted); font-size:13px; }
-    .dialog-body textarea { width:100%; min-height:260px; resize:vertical; line-height:1.65; }
+    .comparison-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .comparison-panel { min-width:0; }
+    .comparison-title { margin:0 0 7px; color:var(--navy); font-size:14px; }
+    .comparison-content { min-height:300px; max-height:58vh; overflow:auto; padding:12px; border:1px solid #b9c7d1; border-radius:7px; background:#f8fafb; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; }
+    .comparison-content[contenteditable="true"] { background:white; outline:2px solid #2c6c91; }
+    .ai-change { padding:1px 0; background:#ffe98a; box-shadow:0 0 0 1px #f0cf46; }
     .dialog-actions { display:flex; justify-content:flex-end; gap:9px; padding:0 20px 18px; }
     .dialog-button { padding:8px 16px; border:1px solid #aab9c5; border-radius:7px; background:white; cursor:pointer; font-weight:700; }
     .dialog-button.primary { color:white; border-color:var(--ok); background:var(--ok); }
     @media (max-width:1100px) { main{padding:10px}.metrics{grid-template-columns:1fr 1fr}.table-wrap{max-height:none} table{min-width:1200px} }
+    @media (max-width:800px) { .comparison-grid{grid-template-columns:1fr}.comparison-content{min-height:210px;max-height:34vh} }
     @media print { header,.metrics,.toolbar,.column-filter,.new-row,.delete-button,.content-actions{display:none}.content-editor textarea{min-height:0;padding:0;border:0;resize:none}.table-wrap{max-height:none;overflow:visible;border:0} th{position:static} body{background:white} table{font-size:9px} }
   </style>
 </head>
@@ -261,10 +267,19 @@ HTML_TEMPLATE = r'''<!doctype html>
     </div>
   </main>
   <dialog id="aiDialog">
-    <div class="dialog-head"><h2>AI 公文勘误版本</h2></div>
+    <div class="dialog-head"><h2>AI 公文修订对照</h2></div>
     <div class="dialog-body">
       <p id="aiDialogNote" class="dialog-note"></p>
-      <textarea id="aiRevisedContent" readonly aria-label="AI 修订后的需求内容"></textarea>
+      <div class="comparison-grid">
+        <section class="comparison-panel">
+          <h3 class="comparison-title">原文</h3>
+          <div id="aiOriginalContent" class="comparison-content" role="textbox" aria-readonly="true" aria-label="原始需求内容"></div>
+        </section>
+        <section class="comparison-panel">
+          <h3 class="comparison-title">AI 公文修订稿</h3>
+          <div id="aiRevisedContent" class="comparison-content" role="textbox" aria-multiline="true" aria-label="AI 修订后的需求内容" contenteditable="false" spellcheck="true"></div>
+        </section>
+      </div>
     </div>
     <div class="dialog-actions">
       <button id="aiCancel" class="dialog-button" type="button">取消</button>
@@ -287,6 +302,9 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('warnings').textContent=data.warning_count;
     data.disciplines.forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;$('disciplineFilter').append(option)});
     function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=esc(text);if(className)el.className=className;return el}
+    function renderComparison(element,segments,fallback){
+      element.replaceChildren();const parts=Array.isArray(segments)&&segments.length?segments:[{text:fallback,changed:false}];parts.forEach(part=>element.append(node('span',part.text,part.changed?'ai-change':undefined)));
+    }
     let aiAvailable=false,activeProofread=null,aiStartupTimer=null,aiStartupStartedAt=0;
     function stopAiStartupTimer(){
       if(aiStartupTimer!==null){clearInterval(aiStartupTimer);aiStartupTimer=null}
@@ -322,7 +340,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       try{
         const response=await fetch('/api/proofread-content',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requirement_content:content})});
         const result=await response.json();if(!response.ok)throw new Error(result.error||'AI 勘误失败');
-        activeProofread={row,editor};$('aiRevisedContent').value=result.revised_content;$('aiRevisedContent').readOnly=true;$('aiDialogNote').textContent=`模型：${result.model}。请核对事实、数字和专有名词后再接受。`;$('aiDialog').showModal();
+        activeProofread={row,editor};renderComparison($('aiOriginalContent'),result.original_segments,content);renderComparison($('aiRevisedContent'),result.revised_segments,result.revised_content);$('aiRevisedContent').contentEditable='false';$('aiDialogNote').textContent=`黄底为 AI 修改内容 · 模型：${result.model}。请核对事实、数字和专有名词后再接受。`;$('aiDialog').showModal();
       }catch(error){alert(`AI 勘误失败：${errorMessage(error)}`)}
       finally{button.disabled=aiAvailable===false;button.textContent='AI 公文勘误'}
     }
@@ -454,8 +472,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('startLocalAi').addEventListener('click',()=>controlLocalAi('start'));
     $('stopLocalAi').addEventListener('click',()=>controlLocalAi('stop'));
     $('aiCancel').addEventListener('click',()=>{$('aiDialog').close();activeProofread=null});
-    $('aiManualEdit').addEventListener('click',()=>{$('aiRevisedContent').readOnly=false;$('aiRevisedContent').focus();$('aiDialogNote').textContent='已进入手动修改模式；修改完成后点击“接受”。'});
-    $('aiAccept').addEventListener('click',()=>{const revised=$('aiRevisedContent').value.trim();if(!activeProofread||!revised){alert('修订内容不能为空');return}if(revised.length>4000){alert('修订内容不能超过 4000 个字符');return}activeProofread.row.requirement_content=revised;activeProofread.editor.value=revised;$('aiDialog').close();activeProofread=null});
+    $('aiManualEdit').addEventListener('click',()=>{const revised=$('aiRevisedContent');revised.textContent=revised.textContent;revised.contentEditable='true';revised.focus();$('aiDialogNote').textContent='已进入手动修改模式；黄底对比标记已清除，修改完成后点击“接受”。'});
+    $('aiAccept').addEventListener('click',()=>{const revised=$('aiRevisedContent').textContent.trim();if(!activeProofread||!revised){alert('修订内容不能为空');return}if(revised.length>4000){alert('修订内容不能超过 4000 个字符');return}activeProofread.row.requirement_content=revised;activeProofread.editor.value=revised;$('aiDialog').close();activeProofread=null});
     ['search','disciplineFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();requestAnimationFrame(()=>{const tableWrap=document.querySelector('.table-wrap');tableWrap.scrollTop=tableWrap.scrollHeight});checkLocalAi();
   </script>
 </body>

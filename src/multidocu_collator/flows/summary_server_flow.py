@@ -20,6 +20,7 @@ from ..modules.desktop import (
     resolve_relative_file,
 )
 from ..modules.local_ai import (
+    build_text_comparison,
     local_ai_status,
     proofread_official_content,
     shutdown_local_ai,
@@ -100,15 +101,21 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     self._send_json(HTTPStatus.OK, result)
                     return
                 if route == "/api/proofread-content":
+                    original = str(payload.get("requirement_content") or "")
                     revised = proofread_official_content(
-                        str(payload.get("requirement_content") or ""),
+                        original,
                         context=context,
+                    )
+                    original_segments, revised_segments = build_text_comparison(
+                        original.strip(), revised
                     )
                     self._send_json(
                         HTTPStatus.OK,
                         {
                             "ok": True,
                             "revised_content": revised,
+                            "original_segments": original_segments,
+                            "revised_segments": revised_segments,
                             "model": context.local_ai_model,
                         },
                     )
