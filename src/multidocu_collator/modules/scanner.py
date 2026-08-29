@@ -25,6 +25,8 @@ def _file_role(path: Path) -> str:
     if suffix == ".docx":
         return "source_word"
     if suffix == ".pdf":
+        if "附图" in name:
+            return "figure_pdf"
         if "扫描件" in name:
             return "signed_scan"
         if name.startswith("需求工作联系单"):

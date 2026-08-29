@@ -31,6 +31,11 @@ from .build_archive_flow import run_build_archive
 from .create_record_flow import create_record
 from .delete_record_flow import delete_record
 from .mutation_lock import RECORD_MUTATION_LOCK
+from .new_content_draft_flow import (
+    clear_new_content_draft,
+    load_new_content_draft,
+    save_new_content_draft,
+)
 from .update_print_status_flow import update_print_statuses
 from .update_record_content_flow import update_record_content
 
@@ -57,6 +62,12 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 result = local_ai_status(context)
                 self._send_json(HTTPStatus.OK, result)
                 return
+            if route == "/api/new-content-draft":
+                try:
+                    self._send_json(HTTPStatus.OK, load_new_content_draft(context))
+                except ValueError as exc:
+                    self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
             if route == "/":
                 self.path = "/" + quote(html_name)
             super().do_GET()
@@ -67,6 +78,7 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 "/api/open-path",
                 "/api/copy-file",
                 "/api/create-record",
+                "/api/save-new-content-draft",
                 "/api/delete-record",
                 "/api/refresh-archive",
                 "/api/save-print-status",
@@ -100,6 +112,11 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     logger.info("已更新联系单需求内容: %s", payload.get("record_id"))
                     self._send_json(HTTPStatus.OK, result)
                     return
+                if route == "/api/save-new-content-draft":
+                    result = save_new_content_draft(context, payload)
+                    logger.info("已临时保存新增需求内容草稿")
+                    self._send_json(HTTPStatus.OK, result)
+                    return
                 if route == "/api/proofread-content":
                     original = str(payload.get("requirement_content") or "")
                     revised = proofread_official_content(
@@ -128,6 +145,10 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     return
                 if route == "/api/create-record":
                     result = create_record(context, payload)
+                    try:
+                        clear_new_content_draft(context)
+                    except OSError:
+                        logger.warning("联系单已创建，但临时草稿清理失败", exc_info=True)
                     logger.info("已创建联系单: %s", result["document_code"])
                     self._send_json(HTTPStatus.CREATED, result)
                     return

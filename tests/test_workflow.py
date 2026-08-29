@@ -40,6 +40,11 @@ from multidocu_collator.flows.create_record_flow import (
 )
 from multidocu_collator.flows.delete_record_flow import delete_record
 from multidocu_collator.flows.summary_server_flow import _handler_class
+from multidocu_collator.flows.new_content_draft_flow import (
+    clear_new_content_draft,
+    load_new_content_draft,
+    save_new_content_draft,
+)
 from multidocu_collator.flows.update_print_status_flow import update_print_statuses
 from multidocu_collator.flows.update_record_content_flow import update_record_content
 from multidocu_collator.config_loader import expand_env, select_cloudstation_root
@@ -155,12 +160,17 @@ class WorkflowTests(unittest.TestCase):
             (folder / "需求工作联系单（给排水-003）_关于测试的事宜.pdf").write_bytes(
                 b"%PDF-1.4\n%%EOF\n"
             )
+            (folder / "设备安装附图.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
             records, unmatched, ignored = scan_data_root(root)
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["discipline"], "给排水")
             self.assertEqual(records[0]["sequence_no"], "003")
             self.assertEqual(records[0]["folder_date"], "2026-08-13")
             self.assertEqual(records[0]["需求内容"], "当前需求第一段\n当前需求第二段")
+            figure = next(
+                item for item in records[0]["files"] if item["name"] == "设备安装附图.pdf"
+            )
+            self.assertEqual(figure["role"], "figure_pdf")
             self.assertEqual(unmatched, [])
             self.assertEqual(ignored, [])
 
@@ -197,6 +207,13 @@ class WorkflowTests(unittest.TestCase):
             html_path = root / "summary.html"
             export_summary_html(data, html_path)
             html = html_path.read_text(encoding="utf-8")
+            generated_at = build_summary_view(data)["generated_at"]
+            self.assertRegex(
+                generated_at,
+                r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$",
+            )
+            self.assertNotIn("+08:00", generated_at)
+            self.assertNotIn("北京时间", generated_at)
             header_tokens = [
                 "<th>序号</th>",
                 "<span>专业</span>",
@@ -208,8 +225,14 @@ class WorkflowTests(unittest.TestCase):
             positions = [html.index(token) for token in header_tokens]
             self.assertEqual(positions, sorted(positions))
             self.assertIn('id="disciplineFilter"', html)
+            self.assertIn('id="warningMetric"', html)
+            self.assertIn('id="warningPreview"', html)
+            self.assertIn("function buildWarningPreview()", html)
+            self.assertIn("row.warnings.join('；')", html)
+            self.assertIn('id="printFilter"', html)
             self.assertIn('id="statusFilter"', html)
             self.assertIn("row.discipline===discipline", html)
+            self.assertIn("row.print_status===printStatus", html)
             self.assertIn("row.status===status", html)
             self.assertIn("row.folder_href", html)
             self.assertIn("openDirectory(event,row)", html)
@@ -217,14 +240,31 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("/api/copy-file", html)
             self.assertIn("copyFile(event,file,a)", html)
             self.assertIn("/api/create-record", html)
+            self.assertIn("/api/new-content-draft", html)
+            self.assertIn("/api/save-new-content-draft", html)
+            self.assertIn("临时保存内容", html)
+            self.assertIn("不会生成 Word/PDF", html)
+            self.assertIn("draft-ai-button ai-button", html)
+            self.assertIn("proofreadContent(null,content,draftAiButton", html)
+            self.assertIn("if(activeProofread.row)", html)
+            self.assertIn("if(activeProofread.onAccept)", html)
             self.assertIn("/api/delete-record", html)
             self.assertIn("/api/refresh-archive", html)
             self.assertIn('id="refreshArchive"', html)
             self.assertIn("refreshArchive(event.currentTarget)", html)
-            self.assertIn("<th>需求单已经打印</th>", html)
+            self.assertIn("<span>需求单已经打印</span>", html)
+            self.assertIn('<option value="是">是</option>', html)
+            self.assertIn('<option value="否">否</option>', html)
             self.assertIn('id="savePrintStatuses"', html)
             self.assertIn("/api/save-print-status", html)
             self.assertIn("savePrintStatuses(event.currentTarget)", html)
+            save_script = html.split("async function savePrintStatuses", 1)[1].split(
+                "async function deleteRecord", 1
+            )[0]
+            self.assertNotIn("location.reload()", save_script)
+            self.assertIn("data.dataset_revision=Number(result.dataset_revision)", save_script)
+            self.assertIn("tableWrap.scrollTop=tableScrollTop", save_script)
+            self.assertIn("window.scrollTo(pageScrollX,pageScrollY)", save_script)
             self.assertIn("/api/update-record-content", html)
             self.assertIn("/api/proofread-content", html)
             self.assertIn("/api/local-ai-status", html)
@@ -243,10 +283,49 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("接受", html)
             self.assertIn("delete-button", html)
             self.assertIn("buildNewRow()", html)
+            self.assertIn(".new-row td { padding:6px 4px; vertical-align:top; }", html)
+            self.assertIn("discipline-picker", html)
+            self.assertIn("disciplinePicker.addEventListener('change'", html)
+            self.assertIn("discipline.value=disciplinePicker.value", html)
+            self.assertNotIn("disciplineOptions", html)
+            self.assertIn(
+                "中国建筑第二工程局有限公司国家会议中心二期项目配套部分项目部",
+                html,
+            )
+            self.assertIn("subject.value='关于   的事宜'", html)
             self.assertIn("tableWrap.scrollTop=tableWrap.scrollHeight", html)
             self.assertIn("Word 正在导出", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
             self.assertEqual(validate_summary_html(html_path, data)["errors"], [])
+
+    def test_new_content_draft_only_saves_text(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data_root = root / "archive"
+            data_root.mkdir()
+            context = AppContext(
+                project_root=root,
+                data_root=data_root,
+                json_name="data.json",
+                html_name="summary.html",
+            )
+
+            result = save_new_content_draft(
+                context, {"requirement_content": "尚未正式提交的需求内容"}
+            )
+            loaded = load_new_content_draft(context)
+
+            self.assertEqual(result["characters"], 11)
+            self.assertEqual(loaded["requirement_content"], "尚未正式提交的需求内容")
+            self.assertFalse(context.json_path.exists())
+            self.assertEqual(list(data_root.glob("*.docx")), [])
+            self.assertEqual(list(data_root.glob("*.pdf")), [])
+            clear_new_content_draft(context)
+            self.assertEqual(load_new_content_draft(context)["requirement_content"], "")
+            with self.assertRaisesRegex(ValueError, "不能超过 4000"):
+                save_new_content_draft(
+                    context, {"requirement_content": "字" * 4001}
+                )
 
     def test_scanner_skips_unreadable_file_and_records_warning(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -373,11 +452,33 @@ class WorkflowTests(unittest.TestCase):
                 context=context,
                 system_name="Windows",
             )
-        self.assertEqual(revised, "请相关单位复核并书面回复。")
+        self.assertEqual(revised, "请相关单位复核并书面回复。\n以下空白")
         self.assertFalse(request.call_args.kwargs["payload"]["stream"])
         system_prompt = request.call_args.kwargs["payload"]["messages"][0]["content"]
         self.assertIn("优化句式、语序和逻辑衔接", system_prompt)
         self.assertIn("准确、简洁、庄重的公文用语", system_prompt)
+        self.assertIn("平方米写为 m²", system_prompt)
+        self.assertIn("千瓦写为 kW", system_prompt)
+        self.assertIn("不得删除", system_prompt)
+        self.assertIn("最后一行", system_prompt)
+        with patch(
+            "multidocu_collator.modules.local_ai._ensure_server",
+            return_value=[context.local_ai_model],
+        ), patch(
+            "multidocu_collator.modules.local_ai._request_json",
+            return_value={
+                "choices": [
+                    {"message": {"content": "设备功率调整为 5 kW。\n以下空白"}}
+                ]
+            },
+        ):
+            preserved_marker = proofread_official_content(
+                "设备功率调整为五千瓦。\n以下空白",
+                context=context,
+                system_name="Windows",
+            )
+        self.assertEqual(preserved_marker, "设备功率调整为 5 kW。\n以下空白")
+        self.assertEqual(preserved_marker.count("以下空白"), 1)
         original_segments, revised_segments = build_text_comparison(
             "请相关单位复合并回复。", "请相关单位复核并书面回复。"
         )
@@ -516,6 +617,21 @@ class WorkflowTests(unittest.TestCase):
             try:
                 with urllib.request.urlopen(base + "/", timeout=3) as response:
                     self.assertIn(b"summary", response.read())
+                draft_request = urllib.request.Request(
+                    base + "/api/save-new-content-draft",
+                    data=json.dumps(
+                        {"requirement_content": "接口临时草稿"}, ensure_ascii=False
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(draft_request, timeout=3) as response:
+                    self.assertEqual(response.status, 200)
+                with urllib.request.urlopen(
+                    base + "/api/new-content-draft", timeout=3
+                ) as response:
+                    draft_result = json.load(response)
+                self.assertEqual(draft_result["requirement_content"], "接口临时草稿")
                 with patch(
                     "multidocu_collator.flows.summary_server_flow.local_ai_status",
                     return_value={
@@ -729,7 +845,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(parsed["rows"][0]["subject"], "</script><script>alert(1)</script>")
             self.assertNotIn("</script><script>alert(1)", embedded)
 
-    def test_file_labels_distinguish_dwg_and_attachment_pdf(self) -> None:
+    def test_file_labels_distinguish_dwg_figure_and_attachment_pdf(self) -> None:
         data = {
             "dataset_revision": 1,
             "records": [{
@@ -746,6 +862,7 @@ class WorkflowTests(unittest.TestCase):
                 "files": [
                     {"name": "图纸.dwg", "extension": ".dwg", "role": "drawing_source", "path": "目录/图纸.dwg"},
                     {"name": "附图.pdf", "extension": ".pdf", "role": "attachment_pdf", "path": "目录/附图.pdf"},
+                    {"name": "说明.pdf", "extension": ".pdf", "role": "attachment_pdf", "path": "目录/说明.pdf"},
                     {"name": "照片.jpg", "extension": ".jpg", "role": "image_attachment", "path": "目录/照片.jpg"},
                 ],
             }],
@@ -754,10 +871,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(files[0]["role_label"], "DWG")
         self.assertEqual(files[0]["kind_class"], "dwg")
         self.assertEqual(files[0]["path"], "目录/图纸.dwg")
-        self.assertEqual(files[1]["role_label"], "附件 PDF")
-        self.assertEqual(files[1]["kind_class"], "attachment-pdf")
-        self.assertEqual(files[2]["type_label"], "JPG")
-        self.assertEqual(files[2]["kind_class"], "")
+        self.assertEqual(files[1]["role_label"], "PDF附图")
+        self.assertEqual(files[1]["kind_class"], "figure-pdf")
+        self.assertEqual(files[2]["role_label"], "附件 PDF")
+        self.assertEqual(files[2]["kind_class"], "attachment-pdf")
+        self.assertEqual(files[3]["type_label"], "JPG")
+        self.assertEqual(files[3]["kind_class"], "")
 
     def test_generates_docx_from_template_without_changing_other_parts(self) -> None:
         from datetime import date

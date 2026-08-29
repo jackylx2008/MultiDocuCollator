@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -20,11 +20,13 @@ ROLE_LABELS = {
     "source_word": "Word",
     "issued_pdf": "PDF",
     "signed_scan": "扫描件",
+    "figure_pdf": "PDF附图",
     "attachment_pdf": "附件 PDF",
     "image_attachment": "图片",
     "drawing_source": "图纸",
     "auxiliary_file": "其他",
 }
+BEIJING_TIMEZONE = timezone(timedelta(hours=8), name="北京时间")
 
 
 def _href(relative_path: str) -> str:
@@ -42,10 +44,14 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
         for item in record.get("files") or []:
             role = str(item.get("role") or "auxiliary_file")
             extension = str(item.get("extension") or "").lower()
+            name = str(item.get("name") or "")
             type_label = extension.removeprefix(".").upper() or "无扩展名"
             if extension == ".dwg":
                 role_label = "DWG"
                 kind_class = "dwg"
+            elif extension == ".pdf" and (role == "figure_pdf" or "附图" in name):
+                role_label = "PDF附图"
+                kind_class = "figure-pdf"
             elif role == "attachment_pdf":
                 role_label = "附件 PDF"
                 kind_class = "attachment-pdf"
@@ -54,7 +60,7 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
                 kind_class = ""
             files.append(
                 {
-                    "name": item.get("name") or "",
+                    "name": name,
                     "role": role,
                     "role_label": role_label,
                     "type_label": type_label,
@@ -95,7 +101,7 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "dataset_revision": int(data.get("dataset_revision") or 0),
-        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(BEIJING_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S"),
         "record_count": len(rows),
         "warning_count": sum(bool(row["warnings"]) for row in rows),
         "status_counts": status_counts,
@@ -138,8 +144,16 @@ HTML_TEMPLATE = r'''<!doctype html>
     #subtitle { margin:0; opacity:.86; font-size:14px; }
     main { padding:18px 22px 28px; }
     .metrics { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:12px; margin-bottom:14px; }
-    .metric { padding:13px 16px; border:1px solid var(--line); border-radius:10px; background:white; box-shadow:0 2px 9px #17324d0c; }
+    .metric { position:relative; padding:13px 16px; border:1px solid var(--line); border-radius:10px; background:white; box-shadow:0 2px 9px #17324d0c; }
     .metric b { display:block; margin-top:3px; font-size:22px; color:var(--navy); }
+    .warning-metric { cursor:help; }
+    .warning-metric:focus { outline:2px solid var(--blue); outline-offset:2px; }
+    .metric-tooltip { position:absolute; z-index:20; top:calc(100% + 8px); right:0; width:min(460px,calc(100vw - 32px)); max-height:320px; overflow:auto; padding:11px 13px; color:#17212b; border:1px solid #d7b66a; border-radius:8px; background:#fffdf4; box-shadow:0 10px 28px #17324d30; opacity:0; visibility:hidden; pointer-events:none; transform:translateY(-4px); transition:opacity .15s,transform .15s,visibility .15s; font-size:12px; font-weight:400; line-height:1.5; }
+    .warning-metric:hover .metric-tooltip,.warning-metric:focus .metric-tooltip,.warning-metric:focus-within .metric-tooltip { opacity:1; visibility:visible; pointer-events:auto; transform:translateY(0); }
+    .warning-preview-item + .warning-preview-item { margin-top:9px; padding-top:9px; border-top:1px solid #eadfbd; }
+    .warning-preview-code { display:block; color:var(--navy); font-size:13px; }
+    .warning-preview-subject { display:block; margin-top:2px; }
+    .warning-preview-message { display:block; margin-top:3px; color:var(--warn); }
     .toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px; border:1px solid var(--line); border-radius:10px 10px 0 0; background:white; }
     input, select, textarea, button { font:inherit; }
     input, select, textarea { min-height:38px; padding:7px 10px; border:1px solid #b9c6d0; border-radius:7px; background:white; }
@@ -182,6 +196,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     .file.dwg:hover { color:white; background:#69418e; }
     .file.attachment-pdf { color:#8a4e00; border-color:#e4c48f; background:#fff7e9; font-weight:700; }
     .file.attachment-pdf:hover { color:white; background:#a15c00; }
+    .file.figure-pdf { color:#815b00; border-color:#e1c65b; background:#fff9d8; font-weight:700; }
+    .file.figure-pdf:hover { color:white; background:#927000; }
     .status { display:inline-block; padding:3px 7px; border-radius:999px; font-weight:700; }
     .status.complete { color:var(--ok); background:#e7f5ed; }
     .status.needs_review { color:var(--warn); background:#fff2dd; }
@@ -193,9 +209,21 @@ HTML_TEMPLATE = r'''<!doctype html>
     .warnings { margin:6px 0 0; padding-left:18px; color:#8a4e00; white-space:normal; }
     .new-row { position:sticky; bottom:0; z-index:1; background:#eef6fc; box-shadow:0 -2px 8px #17324d1c; }
     .new-row:hover { background:#eef6fc; }
-    .new-row td { padding:6px 4px; vertical-align:middle; }
+    .new-row td { padding:6px 4px; vertical-align:top; }
     .new-row input,.new-row textarea { width:100%; min-width:0; padding:6px; font-size:12px; }
     .new-row textarea { min-height:70px; resize:vertical; }
+    .editable-select { position:relative; width:100%; }
+    .editable-select input { padding-right:34px; }
+    .discipline-picker { position:absolute; top:1px; right:1px; width:31px; min-width:31px; height:36px; min-height:36px; padding:0; color:#17212b; border:0; border-left:1px solid #b9c6d0; border-radius:0 6px 6px 0; background:#f8fafb; cursor:pointer; font-size:0; }
+    .discipline-picker option { color:#17212b; background:white; font-size:13px; }
+    .draft-button { width:100%; margin-top:5px; padding:6px 4px; color:#725300; border:1px solid #d8bd58; border-radius:6px; background:#fff8d5; cursor:pointer; font-size:12px; font-weight:700; }
+    .draft-button:hover { color:white; background:#8b6c00; }
+    .draft-button:disabled { opacity:.55; cursor:wait; }
+    .draft-actions { display:flex; gap:5px; }
+    .draft-actions .draft-button { flex:1; width:auto; }
+    .draft-ai-button { color:#174d7a; border-color:#9eb5c7; background:#f4f9fc; }
+    .draft-ai-button:hover { background:var(--blue); }
+    .draft-note { display:block; margin-top:4px; color:var(--muted); font-size:11px; white-space:normal; }
     .save-button { width:100%; padding:9px 4px; color:white; border:0; border-radius:7px; background:var(--blue); cursor:pointer; font-weight:700; }
     .save-button:disabled { opacity:.55; cursor:wait; }
     .save-note { display:block; margin-top:5px; color:var(--muted); font-size:11px; white-space:normal; }
@@ -238,7 +266,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       <div class="metric">联系单总数<b id="total"></b></div>
       <div class="metric">资料齐全<b id="complete"></b></div>
       <div class="metric">待核对<b id="review"></b></div>
-      <div class="metric">有提示记录<b id="warnings"></b></div>
+      <div id="warningMetric" class="metric warning-metric" tabindex="0" aria-describedby="warningPreview">有提示记录<b id="warnings"></b><div id="warningPreview" class="metric-tooltip" role="tooltip"></div></div>
     </section>
     <section class="toolbar">
       <input id="search" type="search" placeholder="搜索专业、编号、日期、致送单位、主题、需求内容……">
@@ -258,7 +286,7 @@ HTML_TEMPLATE = r'''<!doctype html>
           <th>序号</th>
           <th><div class="column-header"><span>专业</span><select id="disciplineFilter" class="column-filter" aria-label="按专业筛选"><option value="">全部专业</option></select></div></th>
           <th>编号</th><th>目录日期</th><th>致送单位</th><th>主题</th><th>需求内容</th><th>资料文件</th>
-          <th>需求单已经打印</th>
+          <th><div class="column-header"><span>需求单已经打印</span><select id="printFilter" class="column-filter" aria-label="按需求单打印标记筛选"><option value="">全部</option><option value="是">是</option><option value="否">否</option></select></div></th>
           <th><div class="column-header"><span>状态 / 核对</span><select id="statusFilter" class="column-filter" aria-label="按状态筛选"><option value="">全部状态</option><option value="complete">资料齐全</option><option value="needs_review">待核对</option><option value="incomplete">资料不完整</option></select></div></th>
         </tr></thead>
         <tbody id="body"></tbody>
@@ -302,6 +330,10 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('warnings').textContent=data.warning_count;
     data.disciplines.forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;$('disciplineFilter').append(option)});
     function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=esc(text);if(className)el.className=className;return el}
+    function buildWarningPreview(){
+      const preview=$('warningPreview'),warningRows=data.rows.filter(row=>row.warnings.length);preview.replaceChildren();if(!warningRows.length){preview.append(node('div','当前没有提示记录'));return}warningRows.forEach(row=>{const item=node('div',undefined,'warning-preview-item');item.append(node('strong',`${row.discipline}-${row.sequence_no} · ${row.folder_date}`,'warning-preview-code'),node('span',row.subject||'（无主题）','warning-preview-subject'),node('span',row.warnings.join('；'),'warning-preview-message'));preview.append(item)});
+    }
+    buildWarningPreview();
     function renderComparison(element,segments,fallback){
       element.replaceChildren();const parts=Array.isArray(segments)&&segments.length?segments:[{text:fallback,changed:false}];parts.forEach(part=>element.append(node('span',part.text,part.changed?'ai-change':undefined)));
     }
@@ -333,14 +365,14 @@ HTML_TEMPLATE = r'''<!doctype html>
       }catch(error){alert(`本地 AI 操作失败：${errorMessage(error)}`);await checkLocalAi()}
       finally{if(action==='start')stopAiStartupTimer()}
     }
-    async function proofreadContent(row,editor,button){
+    async function proofreadContent(row,editor,button,onAccept){
       if(!isLocalService()){alert('AI 勘误需要通过 serve_summary.py 打开本页面。');return}
       const content=editor.value.trim();if(!content){alert('需求内容不能为空');return}
       button.disabled=true;button.textContent='AI 勘误中…';
       try{
         const response=await fetch('/api/proofread-content',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requirement_content:content})});
         const result=await response.json();if(!response.ok)throw new Error(result.error||'AI 勘误失败');
-        activeProofread={row,editor};renderComparison($('aiOriginalContent'),result.original_segments,content);renderComparison($('aiRevisedContent'),result.revised_segments,result.revised_content);$('aiRevisedContent').contentEditable='false';$('aiDialogNote').textContent=`黄底为 AI 修改内容 · 模型：${result.model}。请核对事实、数字和专有名词后再接受。`;$('aiDialog').showModal();
+        activeProofread={row,editor,onAccept};renderComparison($('aiOriginalContent'),result.original_segments,content);renderComparison($('aiRevisedContent'),result.revised_segments,result.revised_content);$('aiRevisedContent').contentEditable='false';$('aiDialogNote').textContent=`黄底为 AI 修改内容 · 模型：${result.model}。请核对事实、数字和专有名词后再接受。`;$('aiDialog').showModal();
       }catch(error){alert(`AI 勘误失败：${errorMessage(error)}`)}
       finally{button.disabled=aiAvailable===false;button.textContent='AI 公文勘误'}
     }
@@ -387,12 +419,13 @@ HTML_TEMPLATE = r'''<!doctype html>
     async function savePrintStatuses(button){
       if(!isLocalService()){alert('保存打印标记需要通过 serve_summary.py 打开本页面。');return}
       const statuses=Object.fromEntries(data.rows.map(row=>[row.record_id,row.print_status]));
+      const tableWrap=document.querySelector('.table-wrap'),tableScrollTop=tableWrap.scrollTop,pageScrollX=window.scrollX,pageScrollY=window.scrollY;
       button.disabled=true;button.textContent='正在保存…';
       try{
         const response=await fetch('/api/save-print-status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,statuses})});
         const result=await response.json();
         if(!response.ok)throw new Error(result.error||'保存失败');
-        location.reload();
+        data.dataset_revision=Number(result.dataset_revision);$('subtitle').textContent=`数据版本 ${data.dataset_revision} · 生成时间 ${data.generated_at}`;button.disabled=false;button.textContent=result.changed?`已保存 ${result.changed} 条`:'没有变更';requestAnimationFrame(()=>{tableWrap.scrollTop=tableScrollTop;window.scrollTo(pageScrollX,pageScrollY)});setTimeout(()=>{button.textContent='保存打印标记'},1500);
       }catch(error){alert(`保存打印标记失败：${errorMessage(error)}`);button.disabled=false;button.textContent='保存打印标记'}
     }
     async function deleteRecord(row,button){
@@ -407,10 +440,10 @@ HTML_TEMPLATE = r'''<!doctype html>
       }catch(error){alert(`删除失败：${errorMessage(error)}`);button.disabled=false;button.textContent='删除'}
     }
     function render(){
-      const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, status=$('statusFilter').value;
+      const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, printStatus=$('printFilter').value, status=$('statusFilter').value;
       const rows=data.rows.filter(row=>{
         const haystack=[row.discipline,row.sequence_no,row.folder_date,row.subject,row.requirement_content,row.word_date,row.word_subject,row.recipient,row.print_status,...row.warnings].join(' ').toLowerCase();
-        return (!query||haystack.includes(query))&&(!discipline||row.discipline===discipline)&&(!status||row.status===status);
+        return (!query||haystack.includes(query))&&(!discipline||row.discipline===discipline)&&(!printStatus||row.print_status===printStatus)&&(!status||row.status===status);
       });
       const body=$('body');body.replaceChildren();
       rows.forEach((row,index)=>{
@@ -440,21 +473,31 @@ HTML_TEMPLATE = r'''<!doctype html>
       return String((values.length?Math.max(...values):0)+1).padStart(3,'0');
     }
     function field(tag,name,placeholder,type){const el=document.createElement(tag);el.name=name;el.placeholder=placeholder||'';if(type)el.type=type;return el}
+    async function loadNewContentDraft(editor,note){
+      if(!isLocalService()){note.textContent='临时保存需通过 serve_summary.py 使用';return}
+      try{const response=await fetch('/api/new-content-draft');const result=await response.json();if(!response.ok)throw new Error(result.error||'草稿读取失败');if(result.requirement_content){editor.value=result.requirement_content;note.textContent='已恢复上次临时保存的内容'}}catch(error){note.textContent=`草稿读取失败：${errorMessage(error)}`}
+    }
+    async function saveNewContentDraft(editor,button,note){
+      if(!isLocalService()){alert('临时保存需要通过 serve_summary.py 打开本页面。');return}
+      if(editor.value.length>4000){alert('临时保存内容不能超过 4000 个字符');return}
+      button.disabled=true;button.textContent='正在临时保存…';
+      try{const response=await fetch('/api/save-new-content-draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requirement_content:editor.value})});const result=await response.json();if(!response.ok)throw new Error(result.error||'临时保存失败');button.textContent='已临时保存';note.textContent=`已保存 ${result.characters} 个字符，不会生成 Word/PDF`;setTimeout(()=>{button.disabled=false;button.textContent='临时保存内容'},1200)}catch(error){alert(`临时保存失败：${errorMessage(error)}`);button.disabled=false;button.textContent='临时保存内容'}
+    }
     function buildNewRow(){
       const tr=node('tr',undefined,'new-row');tr.id='newRow';tr.append(node('td','新增'));
-      const discipline=field('input','discipline','专业');discipline.setAttribute('list','disciplineOptions');
-      const list=document.createElement('datalist');list.id='disciplineOptions';data.disciplines.forEach(value=>{const option=document.createElement('option');option.value=value;list.append(option)});
-      const disciplineCell=node('td');disciplineCell.append(discipline,list);tr.append(disciplineCell);
+      const discipline=field('input','discipline','输入或点右侧箭头选择');discipline.autocomplete='off';const disciplinePicker=node('select',undefined,'discipline-picker');disciplinePicker.name='discipline_picker';disciplinePicker.setAttribute('aria-label','选择已有专业');const pickerPlaceholder=node('option','选择已有专业');pickerPlaceholder.value='';disciplinePicker.append(pickerPlaceholder);data.disciplines.forEach(value=>{const option=node('option',value);option.value=value;disciplinePicker.append(option)});const disciplineWrap=node('div',undefined,'editable-select');disciplineWrap.append(discipline,disciplinePicker);
+      const disciplineCell=node('td');disciplineCell.append(disciplineWrap);tr.append(disciplineCell);
       const sequence=field('input','sequence_no','自动','text');sequence.inputMode='numeric';const sequenceCell=node('td');sequenceCell.append(sequence);tr.append(sequenceCell);
       const dateInput=field('input','folder_date','', 'date');dateInput.value=localDate();const dateCell=node('td');dateCell.append(dateInput);tr.append(dateCell);
-      const recipient=field('textarea','recipient','致送单位');const recipientCell=node('td');recipientCell.append(recipient);tr.append(recipientCell);
-      const subject=field('textarea','subject','主题');const subjectCell=node('td');subjectCell.append(subject);tr.append(subjectCell);
-      const content=field('textarea','requirement_content','需求内容');const contentCell=node('td');contentCell.append(content);tr.append(contentCell);
+      const recipient=field('textarea','recipient','致送单位');recipient.value='中国建筑第二工程局有限公司国家会议中心二期项目配套部分项目部';const recipientCell=node('td');recipientCell.append(recipient);tr.append(recipientCell);
+      const subject=field('textarea','subject','主题');subject.value='关于   的事宜';const subjectCell=node('td');subjectCell.append(subject);tr.append(subjectCell);
+      const content=field('textarea','requirement_content','需求内容'),draftAiButton=node('button','AI 公文勘误','draft-button draft-ai-button ai-button'),draftButton=node('button','临时保存内容','draft-button'),draftNote=node('span','AI 修订或临时保存都不会生成 Word/PDF','draft-note'),draftActions=node('div',undefined,'draft-actions');draftAiButton.type='button';draftAiButton.disabled=!aiAvailable;draftAiButton.addEventListener('click',()=>proofreadContent(null,content,draftAiButton,()=>{draftNote.textContent='AI 修订稿已回填；如需保留，请点击“临时保存内容”'}));draftButton.type='button';draftButton.title='保存到项目本地草稿，重启服务后仍可恢复';draftButton.addEventListener('click',()=>saveNewContentDraft(content,draftButton,draftNote));draftActions.append(draftAiButton,draftButton);const contentCell=node('td');contentCell.append(content,draftActions,draftNote);tr.append(contentCell);loadNewContentDraft(content,draftNote);
       const fileCell=node('td','保存后自动创建目录、DOCX 和 PDF');tr.append(fileCell);
       tr.append(node('td','否'));
       const actionCell=node('td'),button=node('button','保存','save-button'),note=node('span','编号可自动生成，也可手填','save-note');button.type='button';actionCell.append(button,note);tr.append(actionCell);
       if(data.disciplines.length){discipline.value=data.disciplines[0];sequence.value=suggestedSequence(discipline.value)}
       discipline.addEventListener('input',()=>{if(!sequenceEdited)sequence.value=suggestedSequence(discipline.value.trim())});
+      disciplinePicker.addEventListener('change',()=>{if(!disciplinePicker.value)return;discipline.value=disciplinePicker.value;discipline.dispatchEvent(new Event('input',{bubbles:true}));disciplinePicker.value='';discipline.focus()});
       sequence.addEventListener('input',()=>{sequenceEdited=sequence.value.trim()!==''});
       button.addEventListener('click',async()=>{
         if(!['http:','https:'].includes(location.protocol)||!['127.0.0.1','localhost','::1'].includes(location.hostname)){alert('新增保存需要通过 serve_summary.py 打开本页面。');return}
@@ -473,8 +516,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('stopLocalAi').addEventListener('click',()=>controlLocalAi('stop'));
     $('aiCancel').addEventListener('click',()=>{$('aiDialog').close();activeProofread=null});
     $('aiManualEdit').addEventListener('click',()=>{const revised=$('aiRevisedContent');revised.textContent=revised.textContent;revised.contentEditable='true';revised.focus();$('aiDialogNote').textContent='已进入手动修改模式；黄底对比标记已清除，修改完成后点击“接受”。'});
-    $('aiAccept').addEventListener('click',()=>{const revised=$('aiRevisedContent').textContent.trim();if(!activeProofread||!revised){alert('修订内容不能为空');return}if(revised.length>4000){alert('修订内容不能超过 4000 个字符');return}activeProofread.row.requirement_content=revised;activeProofread.editor.value=revised;$('aiDialog').close();activeProofread=null});
-    ['search','disciplineFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();requestAnimationFrame(()=>{const tableWrap=document.querySelector('.table-wrap');tableWrap.scrollTop=tableWrap.scrollHeight});checkLocalAi();
+    $('aiAccept').addEventListener('click',()=>{const revised=$('aiRevisedContent').textContent.trim();if(!activeProofread||!revised){alert('修订内容不能为空');return}if(revised.length>4000){alert('修订内容不能超过 4000 个字符');return}if(activeProofread.row)activeProofread.row.requirement_content=revised;activeProofread.editor.value=revised;if(activeProofread.onAccept)activeProofread.onAccept(revised);$('aiDialog').close();activeProofread=null});
+    ['search','disciplineFilter','printFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();requestAnimationFrame(()=>{const tableWrap=document.querySelector('.table-wrap');tableWrap.scrollTop=tableWrap.scrollHeight});checkLocalAi();
   </script>
 </body>
 </html>

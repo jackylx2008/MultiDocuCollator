@@ -344,7 +344,11 @@ def proofread_official_content(
                         "修正错别字、标点和病句；将口语化、重复、含混或冗长表达改为准确、简洁、"
                         "庄重的公文用语；优化句式、语序和逻辑衔接；统一术语及规范表达。"
                         "允许为提升公文质量重写句式，但不得改变、增加或删减任何事实、数字、日期、"
-                        "计量单位、专有名词、责任主体、具体要求或时限。"
+                        "计量含义、专有名词、责任主体、具体要求或时限。距离、长度、面积、功率等"
+                        "单位必须使用规范的字母或符号，不使用汉字单位，例如米写为 m、毫米写为 mm、"
+                        "平方米写为 m²、瓦写为 W、千瓦写为 kW；只规范单位写法，不改变数值。"
+                        "正文事项写完后，最后必须另起一行且只写“以下空白”。如果原文已经由人工写有"
+                        "“以下空白”，审核时不得删除，必须保留为修订稿的最后一行，且不要重复。"
                         "只输出修订后的正文，不要解释、标题、引号或 Markdown。"
                     ),
                 },
@@ -363,6 +367,8 @@ def proofread_official_content(
         revised = revised.strip("`").strip()
         if revised.startswith("text"):
             revised = revised[4:].lstrip("\r\n")
+    if revised and revised.splitlines()[-1].strip() != "以下空白":
+        revised = revised.rstrip() + "\n以下空白"
     if not revised:
         raise RuntimeError("本地 AI 没有返回修订内容")
     if len(revised) > 4000:
