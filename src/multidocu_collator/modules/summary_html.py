@@ -517,7 +517,16 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('aiCancel').addEventListener('click',()=>{$('aiDialog').close();activeProofread=null});
     $('aiManualEdit').addEventListener('click',()=>{const revised=$('aiRevisedContent');revised.textContent=revised.textContent;revised.contentEditable='true';revised.focus();$('aiDialogNote').textContent='已进入手动修改模式；黄底对比标记已清除，修改完成后点击“接受”。'});
     $('aiAccept').addEventListener('click',()=>{const revised=$('aiRevisedContent').textContent.trim();if(!activeProofread||!revised){alert('修订内容不能为空');return}if(revised.length>4000){alert('修订内容不能超过 4000 个字符');return}if(activeProofread.row)activeProofread.row.requirement_content=revised;activeProofread.editor.value=revised;if(activeProofread.onAccept)activeProofread.onAccept(revised);$('aiDialog').close();activeProofread=null});
-    ['search','disciplineFilter','printFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();requestAnimationFrame(()=>{const tableWrap=document.querySelector('.table-wrap');tableWrap.scrollTop=tableWrap.scrollHeight});checkLocalAi();
+    function scrollToNewEntry(){
+      const tableWrap=document.querySelector('.table-wrap'),entry=$('newRow');
+      if(!tableWrap||!entry)return;
+      tableWrap.scrollTop=tableWrap.scrollHeight;
+      entry.scrollIntoView({block:'end',inline:'nearest'});
+      tableWrap.scrollTop=tableWrap.scrollHeight;
+    }
+    function scheduleInitialScroll(){[0,120,400].forEach(delay=>setTimeout(()=>requestAnimationFrame(scrollToNewEntry),delay))}
+    if('scrollRestoration' in history)history.scrollRestoration='manual';
+    ['search','disciplineFilter','printFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();scheduleInitialScroll();window.addEventListener('load',scheduleInitialScroll,{once:true});window.addEventListener('pageshow',scheduleInitialScroll,{once:true});checkLocalAi();
   </script>
 </body>
 </html>

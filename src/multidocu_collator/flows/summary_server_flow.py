@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import platform
+import subprocess
 import webbrowser
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -42,6 +44,36 @@ from .update_record_content_flow import update_record_content
 
 logger = get_logger(__name__)
 MAX_REQUEST_BYTES = 1024 * 1024
+
+
+def _open_summary_browser(url: str, *, system_name: str | None = None) -> None:
+    """打开汇总页；Windows 下脱离启动器进程树，避免 Code Runner 连带关闭浏览器。"""
+    if (system_name or platform.system()) != "Windows":
+        webbrowser.open(url)
+        return
+
+    creation_flags = (
+        getattr(subprocess, "DETACHED_PROCESS", 0)
+        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    )
+    breakaway_flag = getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+    command = ["cmd.exe", "/d", "/c", "start", "", url]
+    options = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    try:
+        subprocess.Popen(
+            command,
+            creationflags=creation_flags | breakaway_flag,
+            **options,
+        )
+    except OSError:
+        # 某些宿主 Job 不允许 BREAKAWAY；其余分离标志仍可避免普通进程树终止。
+        subprocess.Popen(command, creationflags=creation_flags, **options)
 
 
 def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
@@ -206,7 +238,7 @@ def run_summary_server(
     logger.info("本地汇总服务: %s", url)
     logger.info("按 Ctrl+C 停止服务")
     if open_browser:
-        webbrowser.open(url)
+        _open_summary_browser(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

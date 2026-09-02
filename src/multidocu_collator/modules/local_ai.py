@@ -323,6 +323,11 @@ def proofread_official_content(
         raise ValueError("需求内容不能为空")
     if len(text) > 4000:
         raise ValueError("需求内容不能超过 4000 个字符")
+    text = "\n".join(
+        line for line in text.splitlines() if line.strip() != "以下空白"
+    ).strip()
+    if not text:
+        raise ValueError("删除“以下空白”后，需求内容不能为空")
     models = _ensure_server(context)
     if context.local_ai_model not in models:
         raise RuntimeError(
@@ -347,8 +352,8 @@ def proofread_official_content(
                         "计量含义、专有名词、责任主体、具体要求或时限。距离、长度、面积、功率等"
                         "单位必须使用规范的字母或符号，不使用汉字单位，例如米写为 m、毫米写为 mm、"
                         "平方米写为 m²、瓦写为 W、千瓦写为 kW；只规范单位写法，不改变数值。"
-                        "正文事项写完后，最后必须另起一行且只写“以下空白”。如果原文已经由人工写有"
-                        "“以下空白”，审核时不得删除，必须保留为修订稿的最后一行，且不要重复。"
+                        "“以下空白”是排版标记，不属于需求正文：如果输入中出现则删除，"
+                        "如果输入中没有也不得新增。"
                         "只输出修订后的正文，不要解释、标题、引号或 Markdown。"
                     ),
                 },
@@ -367,8 +372,9 @@ def proofread_official_content(
         revised = revised.strip("`").strip()
         if revised.startswith("text"):
             revised = revised[4:].lstrip("\r\n")
-    if revised and revised.splitlines()[-1].strip() != "以下空白":
-        revised = revised.rstrip() + "\n以下空白"
+    revised = "\n".join(
+        line for line in revised.splitlines() if line.strip() != "以下空白"
+    ).strip()
     if not revised:
         raise RuntimeError("本地 AI 没有返回修订内容")
     if len(revised) > 4000:
