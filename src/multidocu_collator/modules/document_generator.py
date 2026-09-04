@@ -309,9 +309,13 @@ def generate_contact_docx(
 
 
 def update_contact_content(
-    source_path: Path, output: Path, *, requirement_content: str
+    source_path: Path,
+    output: Path,
+    *,
+    requirement_content: str,
+    subject: str | None = None,
 ) -> Path:
-    """只替换既有联系单的需求正文，其他业务字段和 DOCX 部件保持不变。"""
+    """替换既有联系单的主题/需求正文，其他业务字段和 DOCX 部件保持不变。"""
     if not source_path.is_file():
         raise FileNotFoundError(f"联系单 Word 不存在: {source_path}")
     original_fields = parse_docx(source_path)
@@ -319,7 +323,23 @@ def update_contact_content(
         with ZipFile(source_path) as source:
             original_document_xml = source.read("word/document.xml")
             document = _parse_preserving_namespaces(original_document_xml)
-            line_delta = _replace_content(document, requirement_content)
+            line_delta = 0
+            if subject is not None:
+                paragraphs = list(document.iter(f"{W}p"))
+                subject_paragraph = next(
+                    p
+                    for p in paragraphs
+                    if _normalized(_paragraph_text(p)).startswith("事由：")
+                )
+                original_subject_lines = _estimated_visual_lines(
+                    _paragraph_text(subject_paragraph)
+                )
+                _replace_after_colon(subject_paragraph, subject)
+                line_delta += (
+                    _estimated_visual_lines(_paragraph_text(subject_paragraph))
+                    - original_subject_lines
+                )
+            line_delta += _replace_content(document, requirement_content)
             overflow_lines = _resize_filler_paragraphs(document, line_delta)
             _shrink_body_row_minimum(document, overflow_lines)
             document_xml = _serialize_preserving_root(document, original_document_xml)
@@ -352,7 +372,10 @@ def update_contact_content(
         "资料编号": (updated_fields.document_no, original_fields.document_no),
         "日期": (updated_fields.document_date, original_fields.document_date),
         "致送单位": (updated_fields.recipient, original_fields.recipient),
-        "事由": (updated_fields.subject, original_fields.subject),
+        "事由": (
+            updated_fields.subject,
+            original_fields.subject if subject is None else subject,
+        ),
         "工程名称": (updated_fields.project_name, original_fields.project_name),
     }
     changed_fields = [

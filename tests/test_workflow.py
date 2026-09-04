@@ -39,7 +39,10 @@ from multidocu_collator.flows.create_record_flow import (
     next_sequence,
 )
 from multidocu_collator.flows.delete_record_flow import delete_record
-from multidocu_collator.flows.summary_server_flow import _handler_class
+from multidocu_collator.flows.summary_server_flow import (
+    _handler_class,
+    _open_summary_browser,
+)
 from multidocu_collator.flows.new_content_draft_flow import (
     clear_new_content_draft,
     load_new_content_draft,
@@ -266,6 +269,12 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("tableWrap.scrollTop=tableScrollTop", save_script)
             self.assertIn("window.scrollTo(pageScrollX,pageScrollY)", save_script)
             self.assertIn("/api/update-record-content", html)
+            self.assertIn('id="manualEditDialog"', html)
+            self.assertIn('id="subjectActionDialog"', html)
+            self.assertIn("showSubjectActions(row,subjectLink,contentInput)", html)
+            self.assertIn("contentInput.readOnly=true", html)
+            self.assertIn("node('button','修改','content-button')", html)
+            self.assertIn("subject,requirement_content:content", html)
             self.assertIn("/api/proofread-content", html)
             self.assertIn("/api/local-ai-status", html)
             self.assertIn("/api/${action}-local-ai", html)
@@ -294,6 +303,10 @@ class WorkflowTests(unittest.TestCase):
             )
             self.assertIn("subject.value='关于   的事宜'", html)
             self.assertIn("tableWrap.scrollTop=tableWrap.scrollHeight", html)
+            self.assertIn("function scrollToNewEntry()", html)
+            self.assertIn("entry.scrollIntoView({block:'end'", html)
+            self.assertIn("history.scrollRestoration='manual'", html)
+            self.assertIn("[0,120,400]", html)
             self.assertIn("Word 正在导出", html)
             self.assertEqual(validate_dataset(data, root)["errors"], [])
             self.assertEqual(validate_summary_html(html_path, data)["errors"], [])
@@ -443,7 +456,11 @@ class WorkflowTests(unittest.TestCase):
             "multidocu_collator.modules.local_ai._request_json",
             return_value={
                 "choices": [
-                    {"message": {"content": "请相关单位复核并书面回复。"}}
+                    {
+                        "message": {
+                            "content": "请相关单位复核并书面回复。\n以下空白"
+                        }
+                    }
                 ]
             },
         ) as request:
@@ -452,15 +469,15 @@ class WorkflowTests(unittest.TestCase):
                 context=context,
                 system_name="Windows",
             )
-        self.assertEqual(revised, "请相关单位复核并书面回复。\n以下空白")
+        self.assertEqual(revised, "请相关单位复核并书面回复。")
         self.assertFalse(request.call_args.kwargs["payload"]["stream"])
         system_prompt = request.call_args.kwargs["payload"]["messages"][0]["content"]
         self.assertIn("优化句式、语序和逻辑衔接", system_prompt)
         self.assertIn("准确、简洁、庄重的公文用语", system_prompt)
         self.assertIn("平方米写为 m²", system_prompt)
         self.assertIn("千瓦写为 kW", system_prompt)
-        self.assertIn("不得删除", system_prompt)
-        self.assertIn("最后一行", system_prompt)
+        self.assertIn("如果输入中出现则删除", system_prompt)
+        self.assertIn("如果输入中没有也不得新增", system_prompt)
         with patch(
             "multidocu_collator.modules.local_ai._ensure_server",
             return_value=[context.local_ai_model],
@@ -471,14 +488,18 @@ class WorkflowTests(unittest.TestCase):
                     {"message": {"content": "设备功率调整为 5 kW。\n以下空白"}}
                 ]
             },
-        ):
-            preserved_marker = proofread_official_content(
+        ) as marker_request:
+            removed_marker = proofread_official_content(
                 "设备功率调整为五千瓦。\n以下空白",
                 context=context,
                 system_name="Windows",
             )
-        self.assertEqual(preserved_marker, "设备功率调整为 5 kW。\n以下空白")
-        self.assertEqual(preserved_marker.count("以下空白"), 1)
+        self.assertEqual(removed_marker, "设备功率调整为 5 kW。")
+        self.assertNotIn("以下空白", removed_marker)
+        marker_user_prompt = marker_request.call_args.kwargs["payload"]["messages"][
+            1
+        ]["content"]
+        self.assertNotIn("以下空白", marker_user_prompt)
         original_segments, revised_segments = build_text_comparison(
             "请相关单位复合并回复。", "请相关单位复核并书面回复。"
         )
@@ -742,6 +763,7 @@ class WorkflowTests(unittest.TestCase):
                 content_payload = {
                     "dataset_revision": 1,
                     "record_id": "id",
+                    "subject": "更新主题",
                     "requirement_content": "更新内容",
                 }
                 content_request = urllib.request.Request(
@@ -818,6 +840,33 @@ class WorkflowTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_windows_browser_launch_is_detached_from_code_runner(self) -> None:
+        module = "multidocu_collator.flows.summary_server_flow.subprocess"
+        with (
+            patch(f"{module}.DETACHED_PROCESS", 0x00000008, create=True),
+            patch(f"{module}.CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True),
+            patch(f"{module}.CREATE_NO_WINDOW", 0x08000000, create=True),
+            patch(f"{module}.CREATE_BREAKAWAY_FROM_JOB", 0x01000000, create=True),
+            patch(f"{module}.Popen") as launcher,
+            patch(
+                "multidocu_collator.flows.summary_server_flow.webbrowser.open"
+            ) as browser_open,
+        ):
+            _open_summary_browser(
+                "http://127.0.0.1:12345/", system_name="Windows"
+            )
+
+        launcher.assert_called_once()
+        self.assertEqual(
+            launcher.call_args.args[0],
+            ["cmd.exe", "/d", "/c", "start", "", "http://127.0.0.1:12345/"],
+        )
+        self.assertEqual(
+            launcher.call_args.kwargs["creationflags"],
+            0x00000008 | 0x00000200 | 0x08000000 | 0x01000000,
+        )
+        browser_open.assert_not_called()
 
     def test_summary_embedded_json_escapes_script_markup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -910,12 +959,13 @@ class WorkflowTests(unittest.TestCase):
                 output,
                 updated_output,
                 requirement_content="更新后的第一项需求\n更新后的第二项需求",
+                subject="关于同时修改主题和内容的事宜",
             )
             updated_fields = parse_docx(updated_output)
             self.assertEqual(updated_fields.document_no, fields.document_no)
             self.assertEqual(updated_fields.document_date, fields.document_date)
             self.assertEqual(updated_fields.recipient, fields.recipient)
-            self.assertEqual(updated_fields.subject, fields.subject)
+            self.assertEqual(updated_fields.subject, "关于同时修改主题和内容的事宜")
             self.assertEqual(
                 updated_fields.requirement_content,
                 "更新后的第一项需求\n更新后的第二项需求",
@@ -1017,7 +1067,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(environment["MULTIDOCU_INPUT_PATH"], str(docx.resolve()))
             self.assertEqual(environment["MULTIDOCU_OUTPUT_PATH"], str(pdf.resolve()))
 
-    def test_updates_only_existing_content_and_reissues_pdf(self) -> None:
+    def test_updates_existing_subject_and_content_and_reissues_pdf(self) -> None:
         from datetime import date
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -1044,6 +1094,10 @@ class WorkflowTests(unittest.TestCase):
                 "records": [
                     {
                         "record_id": "record-1",
+                        "document_code": "给排水-001",
+                        "folder_date": "2026-08-24",
+                        "folder_path": folder.name,
+                        "subject": "测试事项",
                         "需求内容": "原需求内容",
                         "files": [
                             {
@@ -1085,10 +1139,13 @@ class WorkflowTests(unittest.TestCase):
                         {
                             "dataset_revision": 5,
                             "record_id": "record-1",
+                            "subject": "不应保留的主题",
                             "requirement_content": "不应保留的内容",
                         },
                     )
             self.assertEqual(parse_docx(word).requirement_content, "原需求内容")
+            self.assertEqual(parse_docx(word).subject, "测试事项")
+            self.assertTrue(folder.is_dir())
             self.assertEqual(pdf.read_bytes(), b"%PDF-" + b"old" * 40)
 
             with patch(
@@ -1110,6 +1167,37 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(parse_docx(word).requirement_content, "修订后的需求内容")
             self.assertEqual(pdf.read_bytes(), b"%PDF-" + b"new" * 40)
             rebuild.assert_called_once_with(context)
+
+            revised_subject = "关于修改后测试事项的事宜"
+            with patch(
+                "multidocu_collator.flows.update_record_content_flow.export_pdf_with_word",
+                side_effect=export_pdf,
+            ), patch(
+                "multidocu_collator.flows.update_record_content_flow.run_build_archive",
+                return_value={"changed": True},
+            ):
+                result = update_record_content(
+                    context,
+                    {
+                        "dataset_revision": 5,
+                        "record_id": "record-1",
+                        "subject": revised_subject,
+                        "requirement_content": "主题和正文均已修改",
+                    },
+                )
+            revised_folder = root / f"给排水-001-2026-08-24_{revised_subject}"
+            revised_base = f"需求工作联系单（给排水-001）_{revised_subject}"
+            revised_word = revised_folder / f"{revised_base}.docx"
+            revised_pdf = revised_folder / f"{revised_base}.pdf"
+            self.assertTrue(result["changed"])
+            self.assertFalse(folder.exists())
+            self.assertTrue(revised_folder.is_dir())
+            self.assertEqual(parse_docx(revised_word).subject, revised_subject)
+            self.assertEqual(
+                parse_docx(revised_word).requirement_content,
+                "主题和正文均已修改",
+            )
+            self.assertEqual(revised_pdf.read_bytes(), b"%PDF-" + b"new" * 40)
 
     def test_create_record_commits_only_complete_docx_and_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

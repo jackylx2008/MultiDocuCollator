@@ -5,7 +5,7 @@
   当前系统的 CloudStation 根目录定位资料，并使用 Finder、Windows 资源管理器
   或 Linux 默认文件管理器打开对应目录。汇总表末行还可提交新联系单，服务使用
   同级 DOCX 模板创建文档并通过 Microsoft Word 导出 PDF，随后刷新 JSON/HTML；
-  既有记录可只更新需求正文并重新出具 PDF，Windows 还可自动启动本机
+  既有记录可更新主题和需求正文、同步目录名并重新出具 PDF，Windows 还可自动启动本机
   llama.cpp 服务进行勘误。
 
 配置文件：
