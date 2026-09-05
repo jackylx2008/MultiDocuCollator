@@ -132,7 +132,7 @@ def load_settings(project_root: Path) -> dict[str, Any]:
             "LLAMACPP_BASE_URL", "http://127.0.0.1:8080/v1"
         ).strip(),
         "local_ai_model": os.environ.get(
-            "LLAMACPP_MODEL", "Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf"
+            "LLAMACPP_MODEL", "Qwen3.8-27B-Q4_K_M.gguf"
         ).strip(),
         "local_ai_autostart": os.environ.get(
             "LLAMACPP_AUTOSTART", "true"

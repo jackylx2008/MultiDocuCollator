@@ -170,11 +170,11 @@ DOCX/PDF 文件名。Word、PDF、目录及 JSON/HTML 全部更新成功后才�
 
 ```dotenv
 LLAMACPP_BASE_URL=http://127.0.0.1:8080/v1
-LLAMACPP_MODEL=Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf
+LLAMACPP_MODEL=Qwen3.8-27B-Q4_K_M.gguf
 LLAMACPP_AUTOSTART=true
 LLAMACPP_SERVER_PATH=D:\llama-cpp-cu12\llama-server.exe
-LLAMACPP_MODEL_PATH=C:\path\to\Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf
-LLAMACPP_MMPROJ_PATH=C:\path\to\mmproj-Qwen_Qwen2.5-VL-7B-Instruct-f16.gguf
+LLAMACPP_MODEL_PATH=C:\path\to\Qwen3.8-27B-Q4_K_M.gguf
+LLAMACPP_MMPROJ_PATH=C:\path\to\mmproj-Qwen3.8-27B-BF16.gguf
 LLAMACPP_N_GPU_LAYERS=999
 ```
 

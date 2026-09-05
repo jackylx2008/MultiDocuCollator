@@ -14,7 +14,7 @@ class AppContext:
     html_name: str
     template_name: str = "需求工作联系单模板.docx"
     local_ai_base_url: str = "http://127.0.0.1:8080/v1"
-    local_ai_model: str = "Qwen_Qwen2.5-VL-7B-Instruct-Q4_K_S.gguf"
+    local_ai_model: str = "Qwen3.8-27B-Q4_K_M.gguf"
     local_ai_autostart: bool = True
     local_ai_server_path: str = ""
     local_ai_model_path: str = ""
