@@ -49,6 +49,13 @@ def get_logger(name: str | None = None) -> logging.Logger:
     return logging.getLogger(name)
 
 
+def configure_utf8_stdio() -> None:
+    """在支持 reconfigure 的终端中统一使用 UTF-8 输出。"""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def _coerce_log_level(log_level: int | str) -> int:
     if isinstance(log_level, int):
         return log_level
