@@ -25,9 +25,6 @@ from ..modules.local_ai import (
     build_text_comparison,
     local_ai_status,
     proofread_official_content,
-    shutdown_local_ai,
-    start_local_ai,
-    stop_local_ai,
 )
 from .build_archive_flow import run_build_archive
 from .create_record_flow import create_record
@@ -114,10 +111,9 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 "/api/delete-record",
                 "/api/refresh-archive",
                 "/api/save-print-status",
+                "/api/save-manual-statuses",
                 "/api/update-record-content",
                 "/api/proofread-content",
-                "/api/start-local-ai",
-                "/api/stop-local-ai",
             }:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
@@ -134,9 +130,9 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     logger.info("已从实际资料目录重新扫描并刷新汇总")
                     self._send_json(HTTPStatus.OK, result)
                     return
-                if route == "/api/save-print-status":
+                if route in {"/api/save-print-status", "/api/save-manual-statuses"}:
                     result = update_print_statuses(context, payload)
-                    logger.info("已保存 %d 条需求单打印标记", result["changed"])
+                    logger.info("已保存 %d 项打印或作废状态修改", result["changed"])
                     self._send_json(HTTPStatus.OK, result)
                     return
                 if route == "/api/update-record-content":
@@ -168,12 +164,6 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                             "model": context.local_ai_model,
                         },
                     )
-                    return
-                if route == "/api/start-local-ai":
-                    self._send_json(HTTPStatus.OK, start_local_ai(context))
-                    return
-                if route == "/api/stop-local-ai":
-                    self._send_json(HTTPStatus.OK, stop_local_ai(context))
                     return
                 if route == "/api/create-record":
                     result = create_record(context, payload)
@@ -245,5 +235,4 @@ def run_summary_server(
         logger.info("正在停止本地汇总服务")
     finally:
         server.server_close()
-        shutdown_local_ai()
     return url

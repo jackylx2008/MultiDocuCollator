@@ -21,8 +21,8 @@ PDF、图片、DWG 及其他资料不会被移动、改名或删除。
 ```
 
 HTML 前六列固定为“序号、专业、编号、目录日期、致送单位、主题”。JSON 每条记录
-包含中文字段 `致送单位`、`需求内容`、`需求单已经打印`；打印标记只允许“是”或
-“否”，其余字段由资料目录和 Word 自动提取。`需求内容` 只来自 Word 中“内容：”
+包含中文字段 `致送单位`、`需求内容`、`需求单已经打印`、`作废状态`；打印和作废
+标记只允许“是”或“否”，其余字段由资料目录和 Word 自动提取。`需求内容` 只来自 Word 中“内容：”
 与“备注：”之间当前有效且带下划线的文字。Word 日期、事由与目录不一致时只记录
 核对提示，不修改原始资料。
 
@@ -50,8 +50,9 @@ python -m pip --version
 项目当前没有第三方运行依赖，因此创建环境后无需安装额外软件包。运行和测试时
 优先显式使用 `.venv` 内的解释器。
 
-复制 `common.env.example` 为本机私有的 `common.env`。程序自动按运行系统选择群晖
-同步根目录：
+复制 `common.env.example` 为本机私有的 `.env`（也兼容旧的 `common.env`）。程序
+优先读取 `.env`，再用 `common.env` 补齐缺少的配置，并自动按运行系统选择群晖同步
+根目录：
 
 ```dotenv
 CLOUDSTATION_ROOT_WINDOWS=D:\CloudStation
@@ -97,7 +98,7 @@ Windows 可直接双击项目根目录的 `build_archive.cmd`：脚本会先更�
 python build_archive.py --data-root "/path/to/02 酒店需求工作联系单"
 ```
 
-配置好 `common.env` 后也可以直接运行：
+配置好 `.env` 或 `common.env` 后也可以直接运行：
 
 ```bash
 python build_archive.py
@@ -135,9 +136,11 @@ python serve_summary.py
 会重新提取实际目录信息、更新 JSON、重建 HTML，并自动刷新当前页面。
 
 “需求单已经打印”列可人工选择“是”或“否”（旧记录默认“否”），列标题下可按
-“是”或“否”筛选。修改后点击页面顶部的“保存打印标记”，会写回正式 JSON 并
-同步更新正式 HTML，但当前页面不重新加载，筛选条件、所在行及滚动位置保持不变；
-重新扫描实际目录时会保留已保存的人工标记。
+“是”或“否”筛选。“状态 / 核对”列在系统自动状态下方增加“有效/作废”人工选择；
+作废记录仍保留显示，整行覆盖半透明斜线阴影，同时保持下方文字可辨认，也可重新
+改回“有效”。修改后点击页面顶部的“保存修改内容”，会同时保存打印标记和作废
+状态，写回正式 JSON 并同步更新 HTML。保存不重新加载页面，筛选条件、所在行及
+滚动位置保持不变；重新扫描实际目录时会保留两类人工标记。
 
 重新扫描时，如个别资料文件因权限、软件独占或同步状态而暂时无法读取，程序会
 跳过该文件并在对应记录中显示警告，不会中断其余目录及 JSON/HTML 的刷新。待文件
@@ -162,34 +165,23 @@ DOCX/PDF 文件名。Word、PDF、目录及 JSON/HTML 全部更新成功后才�
 
 ## Windows 11 本地 AI 公文勘误
 
-页面的“AI 公文勘误”复用 `LocalAiOcrFile` 已部署的 llama.cpp、CUDA 和本地 GGUF
-模型。默认只允许访问 `http://127.0.0.1:8080/v1`、`localhost` 或 IPv6 回环地址，
-内容不会发送到外部服务。
+页面的“AI 公文勘误”连接由独立启动器管理的 llama.cpp 本地服务。本项目只检查并
+调用 `http://127.0.0.1:8080/v1`，不负责启动、关闭、加载模型或释放显存，内容
+不会发送到外部服务。
 
-`common.env` 需要配置：
+在项目根目录的 `.env` 中配置（旧的 `common.env` 仍可兼容）：
 
 ```dotenv
 LLAMACPP_BASE_URL=http://127.0.0.1:8080/v1
 LLAMACPP_MODEL=Qwen3.8-27B-Q4_K_M.gguf
-LLAMACPP_AUTOSTART=true
-LLAMACPP_SERVER_PATH=D:\llama-cpp-cu12\llama-server.exe
-LLAMACPP_MODEL_PATH=C:\path\to\Qwen3.8-27B-Q4_K_M.gguf
-LLAMACPP_MMPROJ_PATH=C:\path\to\mmproj-Qwen3.8-27B-BF16.gguf
-LLAMACPP_N_GPU_LAYERS=999
+LLAMACPP_API_KEY=独立启动器配置的密钥
+LLAMACPP_TIMEOUT_SEC=180
 ```
 
-重新双击 `build_archive.cmd` 后，页面会依次检查 `/health` 和 `/v1/models`，顶部
-用状态灯显示运行情况：红色表示未启动、黄色表示正在启动或关闭、绿色表示已经
-就绪。点击“启动本地 AI”后，如果 8080 服务不可用且
-`LLAMACPP_AUTOSTART=true`，程序会在后台启动 `llama-server.exe`、加载模型并等待
-健康检查通过；点击“关闭本地 AI”会释放本项目加载的模型和显存。
-
-`serve_summary.py` 退出时也会关闭由本项目启动的进程。如果连接的是外部已经运行
-的服务，状态灯仍显示绿色，但“关闭本地 AI”不可用，避免误关其他程序的服务。
-
-启动日志位于项目的 `log/llama_server.out.log` 和
-`log/llama_server.err.log`。模型首次加载可能需要一些时间，工具栏会显示
-“正在启动并加载模型”；就绪后才启用“AI 公文勘误”按钮。
+启动 `serve_summary.py` 后，页面会自动检查 `/health` 和 `/v1/models`。顶部状态灯
+红色表示 API 不可用、黄色表示正在检查、绿色表示模型已经就绪；也可点击“检查本地
+AI”重新检查。API 不可用时请在新的本地 AI 启动器项目中启动服务，本项目不会尝试
+拉起或终止该进程。检查通过后才启用“AI 公文勘误”按钮。
 
 点击某行“AI 公文勘误”后，模型除修正错别字、标点和病句外，还会将口语化、重复、
 含混或冗长表达改为准确、简洁、庄重的公文用语，并优化句式、语序、逻辑衔接和
@@ -225,8 +217,8 @@ PDF。重启 `serve_summary.py` 后页面会自动恢复草稿；正式新增成
 差异、手动修改和接受功能；接受后只回填新增行，仍需点击“临时保存内容”才能保留
 草稿，也不会生成 Word 或 PDF。
 新增行各单元格统一顶部对齐，增加临时保存按钮后不会导致其他输入框垂直错位。
-本地 AI 未启动时显示红灯；点击“启动本地 AI”后显示黄灯，并在状态文字和按钮上
-持续读秒，模型可用后转为绿灯；点击关闭后恢复红灯。
+本地 AI API 不可用时显示红灯，检查过程中显示黄灯，模型可用后转为绿灯；点击
+“检查本地 AI”可随时刷新状态，但不会启动或关闭外部 AI 服务。
 编号会按所选专业取现有最大编号加一并补足三位，也可手动覆盖；日期默认
 本机当天且可修改。点击“保存”后，服务会：
 
@@ -320,7 +312,7 @@ python -m compileall -q build_archive.py serve_summary.py validate_archive.py lo
 
 ## GitHub 同步
 
-GitHub 使用 SSH remote。提交前必须检查忽略文件，确保 `common.env`、日志、缓存、
+GitHub 使用 SSH remote。提交前必须检查忽略文件，确保 `.env`、`common.env`、日志、缓存、
 虚拟环境和真实业务资料未进入版本库：
 
 ```bash

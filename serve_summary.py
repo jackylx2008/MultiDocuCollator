@@ -5,8 +5,8 @@
   当前系统的 CloudStation 根目录定位资料，并使用 Finder、Windows 资源管理器
   或 Linux 默认文件管理器打开对应目录。汇总表末行还可提交新联系单，服务使用
   同级 DOCX 模板创建文档并通过 Microsoft Word 导出 PDF，随后刷新 JSON/HTML；
-  既有记录可更新主题和需求正文、同步目录名并重新出具 PDF，Windows 还可自动启动本机
-  llama.cpp 服务进行勘误。
+  既有记录可更新主题和需求正文、同步目录名并重新出具 PDF；页面只检查由外部
+  启动器管理的本地 llama.cpp 服务并调用其公文勘误接口。
 
 配置文件：
   默认读取 config.yaml 和本机私有 common.env，与 build_archive.py 使用同一
@@ -60,19 +60,8 @@ def main() -> int:
         template_name=settings["template_name"],
         local_ai_base_url=settings["local_ai_base_url"],
         local_ai_model=settings["local_ai_model"],
-        local_ai_autostart=settings["local_ai_autostart"],
-        local_ai_server_path=settings["local_ai_server_path"],
-        local_ai_model_path=settings["local_ai_model_path"],
-        local_ai_mmproj_path=settings["local_ai_mmproj_path"],
-        local_ai_n_gpu_layers=settings["local_ai_n_gpu_layers"],
-        local_ai_startup_timeout_sec=settings["local_ai_startup_timeout_sec"],
-        local_ai_startup_poll_interval_sec=settings[
-            "local_ai_startup_poll_interval_sec"
-        ],
+        local_ai_api_key=settings["local_ai_api_key"],
         local_ai_request_timeout_sec=settings["local_ai_request_timeout_sec"],
-        local_ai_stdout_log_path=settings["local_ai_stdout_log_path"],
-        local_ai_stderr_log_path=settings["local_ai_stderr_log_path"],
-        local_ai_extra_dll_dirs=settings["local_ai_extra_dll_dirs"],
     )
     try:
         run_summary_server(context, open_browser=not args.no_browser)

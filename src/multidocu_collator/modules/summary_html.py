@@ -86,6 +86,7 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
                 "print_status": (
                     "是" if record.get("需求单已经打印") == "是" else "否"
                 ),
+                "void_status": "是" if record.get("作废状态") == "是" else "否",
                 "status": record.get("status") or "",
                 "status_label": STATUS_LABELS.get(
                     str(record.get("status") or ""), str(record.get("status") or "")
@@ -169,6 +170,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     .column-filter { width:100%; min-height:30px; padding:3px 5px; color:#17212b; border-color:#91a8ba; border-radius:5px; font-size:12px; font-weight:400; }
     td { padding:9px 7px; border-right:1px solid #edf1f4; border-bottom:1px solid #e5eaee; vertical-align:top; overflow-wrap:anywhere; white-space:pre-line; }
     tbody tr:hover { background:#f7fbff; }
+    tbody tr.void-row td { position:relative; }
+    tbody tr.void-row td::after { content:""; position:absolute; z-index:4; inset:0; pointer-events:none; background:repeating-linear-gradient(135deg,transparent 0 10px,rgba(108,116,124,.28) 10px 14px); }
     .subject-link { color:#174d7a; font-weight:600; text-decoration:none; }
     .subject-link:hover { color:#0c6db2; text-decoration:underline; }
     th:nth-child(1),td:nth-child(1) { width:4%; text-align:center; }
@@ -204,8 +207,10 @@ HTML_TEMPLATE = r'''<!doctype html>
     .status.complete { color:var(--ok); background:#e7f5ed; }
     .status.needs_review { color:var(--warn); background:#fff2dd; }
     .status.incomplete { color:var(--bad); background:#fdeaea; }
+    .status.void { color:white; background:#6f7479; }
     .print-save-button { background:var(--ok); }
     .print-select { width:100%; min-width:62px; }
+    .void-select { width:100%; min-width:78px; margin-top:7px; }
     details { margin-top:7px; color:var(--muted); }
     summary { cursor:pointer; color:#36566f; }
     .warnings { margin:6px 0 0; padding-left:18px; color:#8a4e00; white-space:normal; }
@@ -236,10 +241,9 @@ HTML_TEMPLATE = r'''<!doctype html>
     .ai-controls { display:flex; align-items:center; gap:7px; padding:4px 7px; border:1px solid var(--line); border-radius:8px; background:#f8fafb; }
     .ai-state { color:var(--muted); font-size:12px; }
     .ai-light { width:12px; height:12px; flex:0 0 12px; border-radius:50%; background:var(--bad); box-shadow:0 0 0 3px #a4333322; }
-    .ai-light.starting { background:#d69418; box-shadow:0 0 0 3px #d6941822; }
+    .ai-light.checking { background:#d69418; box-shadow:0 0 0 3px #d6941822; }
     .ai-light.running { background:#20a35a; box-shadow:0 0 0 3px #20a35a2a; }
     .ai-control-button { min-height:30px; padding:4px 9px; border:0; border-radius:6px; color:white; background:var(--ok); cursor:pointer; font-size:12px; font-weight:700; }
-    .ai-control-button.stop { background:var(--bad); }
     .ai-control-button:disabled { opacity:.45; cursor:not-allowed; }
     dialog { width:min(1180px,calc(100vw - 32px)); padding:0; border:0; border-radius:12px; box-shadow:0 18px 60px #07152155; }
     dialog::backdrop { background:#07152199; }
@@ -279,12 +283,11 @@ HTML_TEMPLATE = r'''<!doctype html>
     <section class="toolbar">
       <input id="search" type="search" placeholder="搜索专业、编号、日期、致送单位、主题、需求内容……">
       <button id="refreshArchive" class="refresh-button" type="button" title="重新扫描实际资料目录并更新 JSON/HTML">重新扫描刷新</button>
-      <button id="savePrintStatuses" class="refresh-button print-save-button" type="button" title="将本页所有打印标记保存到 JSON，并刷新 HTML">保存打印标记</button>
-      <div class="ai-controls" title="绿色表示已启动，红色表示未启动，黄色表示正在处理">
-        <span id="aiLight" class="ai-light" role="status" aria-label="本地 AI 未启动"></span>
-        <span id="aiState" class="ai-state">本地 AI：未启动</span>
-        <button id="startLocalAi" class="ai-control-button" type="button">启动本地 AI</button>
-        <button id="stopLocalAi" class="ai-control-button stop" type="button" disabled>关闭本地 AI</button>
+      <button id="saveManualStatuses" class="refresh-button print-save-button" type="button" title="保存需求单打印标记和作废状态标记">保存修改内容</button>
+      <div class="ai-controls" title="绿色表示 API 可用，红色表示不可用，黄色表示正在检查">
+        <span id="aiLight" class="ai-light" role="status" aria-label="本地 AI 等待检查"></span>
+        <span id="aiState" class="ai-state">本地 AI：等待检查</span>
+        <button id="checkLocalAi" class="ai-control-button" type="button">检查本地 AI</button>
       </div>
       <span class="visible-count">当前显示 <b id="visible"></b> 条</span>
     </section>
@@ -295,7 +298,7 @@ HTML_TEMPLATE = r'''<!doctype html>
           <th><div class="column-header"><span>专业</span><select id="disciplineFilter" class="column-filter" aria-label="按专业筛选"><option value="">全部专业</option></select></div></th>
           <th>编号</th><th>目录日期</th><th>致送单位</th><th>主题</th><th>需求内容</th><th>资料文件</th>
           <th><div class="column-header"><span>需求单已经打印</span><select id="printFilter" class="column-filter" aria-label="按需求单打印标记筛选"><option value="">全部</option><option value="是">是</option><option value="否">否</option></select></div></th>
-          <th><div class="column-header"><span>状态 / 核对</span><select id="statusFilter" class="column-filter" aria-label="按状态筛选"><option value="">全部状态</option><option value="complete">资料齐全</option><option value="needs_review">待核对</option><option value="incomplete">资料不完整</option></select></div></th>
+          <th><div class="column-header"><span>状态 / 核对</span><select id="statusFilter" class="column-filter" aria-label="按状态筛选"><option value="">全部状态</option><option value="complete">资料齐全</option><option value="needs_review">待核对</option><option value="incomplete">资料不完整</option><option value="void">作废</option></select></div></th>
         </tr></thead>
         <tbody id="body"></tbody>
       </table>
@@ -371,33 +374,19 @@ HTML_TEMPLATE = r'''<!doctype html>
     function renderComparison(element,segments,fallback){
       element.replaceChildren();const parts=Array.isArray(segments)&&segments.length?segments:[{text:fallback,changed:false}];parts.forEach(part=>element.append(node('span',part.text,part.changed?'ai-change':undefined)));
     }
-    let aiAvailable=false,activeProofread=null,activeManualEdit=null,activeSubjectAction=null,aiStartupTimer=null,aiStartupStartedAt=0;
-    function stopAiStartupTimer(){
-      if(aiStartupTimer!==null){clearInterval(aiStartupTimer);aiStartupTimer=null}
-      aiStartupStartedAt=0;$('startLocalAi').textContent='启动本地 AI';
-    }
-    function startAiStartupTimer(){
-      stopAiStartupTimer();aiStartupStartedAt=Date.now();
-      const update=()=>{const seconds=Math.floor((Date.now()-aiStartupStartedAt)/1000);$('aiState').textContent=`本地 AI：正在启动并加载模型… 已等待 ${seconds} 秒`;$('startLocalAi').textContent=`启动中 ${seconds} 秒`};
-      update();aiStartupTimer=setInterval(update,1000);
-    }
+    let aiAvailable=false,activeProofread=null,activeManualEdit=null,activeSubjectAction=null;
     function applyAiStatus(result){
-      stopAiStartupTimer();aiAvailable=Boolean(result.available);$('aiState').textContent=result.message;$('aiState').title=`系统：${result.system} · 模型：${result.model}`;$('aiLight').className=`ai-light${aiAvailable?' running':''}`;$('aiLight').setAttribute('aria-label',aiAvailable?'本地 AI 已启动':'本地 AI 未启动');$('startLocalAi').disabled=aiAvailable;$('stopLocalAi').disabled=!aiAvailable||!result.managed;$('stopLocalAi').title=aiAvailable&&!result.managed?'外部启动的服务不能由本项目关闭':'';document.querySelectorAll('.ai-button').forEach(button=>{button.disabled=!aiAvailable});
+      aiAvailable=Boolean(result.available);$('aiState').textContent=result.message;$('aiState').title=`API：http://127.0.0.1:8080/v1 · 模型：${result.model}`;$('aiLight').className=`ai-light${aiAvailable?' running':''}`;$('aiLight').setAttribute('aria-label',aiAvailable?'本地 AI API 可用':'本地 AI API 不可用');document.querySelectorAll('.ai-button').forEach(button=>{button.disabled=!aiAvailable});
     }
     async function checkLocalAi(){
+      const button=$('checkLocalAi');
       if(!isLocalService()){$('aiState').textContent='本地 AI：请通过 serve_summary.py 打开';aiAvailable=false;return}
+      button.disabled=true;button.textContent='正在检查…';$('aiLight').className='ai-light checking';$('aiState').textContent='本地 AI：正在检查 127.0.0.1:8080…';
       try{
         const response=await fetch('/api/local-ai-status');const result=await response.json();
         applyAiStatus(result);
       }catch(error){applyAiStatus({available:false,managed:false,system:'Windows',model:'—',message:`本地 AI：${errorMessage(error)}`})}
-    }
-    async function controlLocalAi(action){
-      if(!isLocalService()){alert('本地 AI 控制需要通过 serve_summary.py 打开本页面。');return}
-      $('aiLight').className='ai-light starting';$('aiLight').setAttribute('aria-label',action==='start'?'本地 AI 正在启动':'本地 AI 正在关闭');if(action==='start'){startAiStartupTimer()}else{stopAiStartupTimer();$('aiState').textContent='本地 AI：正在关闭…'}$('startLocalAi').disabled=true;$('stopLocalAi').disabled=true;document.querySelectorAll('.ai-button').forEach(button=>{button.disabled=true});
-      try{
-        const response=await fetch(`/api/${action}-local-ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const result=await response.json();if(!response.ok)throw new Error(result.error||'本地 AI 操作失败');applyAiStatus(result);
-      }catch(error){alert(`本地 AI 操作失败：${errorMessage(error)}`);await checkLocalAi()}
-      finally{if(action==='start')stopAiStartupTimer()}
+      finally{button.disabled=false;button.textContent='检查本地 AI'}
     }
     async function proofreadContent(row,editor,button,onAccept){
       if(!isLocalService()){alert('AI 勘误需要通过 serve_summary.py 打开本页面。');return}
@@ -458,17 +447,18 @@ HTML_TEMPLATE = r'''<!doctype html>
         location.reload();
       }catch(error){alert(`刷新失败：${errorMessage(error)}`);button.disabled=false;button.textContent='重新扫描刷新'}
     }
-    async function savePrintStatuses(button){
-      if(!isLocalService()){alert('保存打印标记需要通过 serve_summary.py 打开本页面。');return}
+    async function saveManualStatuses(button){
+      if(!isLocalService()){alert('保存修改内容需要通过 serve_summary.py 打开本页面。');return}
       const statuses=Object.fromEntries(data.rows.map(row=>[row.record_id,row.print_status]));
+      const void_statuses=Object.fromEntries(data.rows.map(row=>[row.record_id,row.void_status]));
       const tableWrap=document.querySelector('.table-wrap'),tableScrollTop=tableWrap.scrollTop,pageScrollX=window.scrollX,pageScrollY=window.scrollY;
       button.disabled=true;button.textContent='正在保存…';
       try{
-        const response=await fetch('/api/save-print-status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,statuses})});
+        const response=await fetch('/api/save-manual-statuses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,statuses,void_statuses})});
         const result=await response.json();
         if(!response.ok)throw new Error(result.error||'保存失败');
-        data.dataset_revision=Number(result.dataset_revision);$('subtitle').textContent=`数据版本 ${data.dataset_revision} · 生成时间 ${data.generated_at}`;button.disabled=false;button.textContent=result.changed?`已保存 ${result.changed} 条`:'没有变更';requestAnimationFrame(()=>{tableWrap.scrollTop=tableScrollTop;window.scrollTo(pageScrollX,pageScrollY)});setTimeout(()=>{button.textContent='保存打印标记'},1500);
-      }catch(error){alert(`保存打印标记失败：${errorMessage(error)}`);button.disabled=false;button.textContent='保存打印标记'}
+        data.dataset_revision=Number(result.dataset_revision);$('subtitle').textContent=`数据版本 ${data.dataset_revision} · 生成时间 ${data.generated_at}`;button.disabled=false;button.textContent=result.changed?`已保存 ${result.changed} 项修改`:'没有变更';requestAnimationFrame(()=>{tableWrap.scrollTop=tableScrollTop;window.scrollTo(pageScrollX,pageScrollY)});setTimeout(()=>{button.textContent='保存修改内容'},1500);
+      }catch(error){alert(`保存修改内容失败：${errorMessage(error)}`);button.disabled=false;button.textContent='保存修改内容'}
     }
     async function deleteRecord(row,button){
       const localHosts=['127.0.0.1','localhost','::1'];
@@ -484,12 +474,13 @@ HTML_TEMPLATE = r'''<!doctype html>
     function render(){
       const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, printStatus=$('printFilter').value, status=$('statusFilter').value;
       const rows=data.rows.filter(row=>{
-        const haystack=[row.discipline,row.sequence_no,row.folder_date,row.subject,row.requirement_content,row.word_date,row.word_subject,row.recipient,row.print_status,...row.warnings].join(' ').toLowerCase();
-        return (!query||haystack.includes(query))&&(!discipline||row.discipline===discipline)&&(!printStatus||row.print_status===printStatus)&&(!status||row.status===status);
+        const haystack=[row.discipline,row.sequence_no,row.folder_date,row.subject,row.requirement_content,row.word_date,row.word_subject,row.recipient,row.print_status,row.void_status==='是'?'作废':'有效',...row.warnings].join(' ').toLowerCase();
+        const matchesStatus=!status||(status==='void'?row.void_status==='是':row.void_status!=='是'&&row.status===status);
+        return (!query||haystack.includes(query))&&(!discipline||row.discipline===discipline)&&(!printStatus||row.print_status===printStatus)&&matchesStatus;
       });
       const body=$('body');body.replaceChildren();
       rows.forEach((row,index)=>{
-        const tr=node('tr');
+        const tr=node('tr');if(row.void_status==='是')tr.classList.add('void-row');
         [index+1,row.discipline,row.sequence_no,row.folder_date,row.recipient||'—'].forEach(value=>tr.append(node('td',value)));
         const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='左键选择打开目录或修改主题';subjectLink.addEventListener('click',event=>{event.preventDefault();showSubjectActions(row,subjectLink,contentInput)});subjectCell.append(subjectLink);tr.append(subjectCell);
         const content=node('td'),contentEditor=node('div',undefined,'content-editor'),contentInput=node('textarea');contentInput.value=row.requirement_content;contentInput.readOnly=true;contentInput.title='点击弹窗修改需求内容';contentInput.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求内容`);contentInput.addEventListener('click',()=>openManualEditor({mode:'content',subject:row.subject,content:contentInput.value,apply:values=>{row.requirement_content=values.content;contentInput.value=values.content}}));
@@ -498,7 +489,8 @@ HTML_TEMPLATE = r'''<!doctype html>
         row.files.forEach(file=>{const a=node('a',file.role_label,`file${file.kind_class?' '+file.kind_class:''}`);a.href=file.href;a.title=`${file.name}\n文件类型：${file.type_label}\n左键复制，可在其他位置粘贴`;a.addEventListener('click',event=>copyFile(event,file,a));files.append(a)});fileCell.append(files);tr.append(fileCell);
         const printCell=node('td'),printSelect=node('select',undefined,'print-select');
         ['否','是'].forEach(value=>{const option=node('option',value);option.value=value;printSelect.append(option)});printSelect.value=row.print_status;printSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求单已经打印`);printSelect.addEventListener('change',()=>{row.print_status=printSelect.value});printCell.append(printSelect);tr.append(printCell);
-        const state=node('td');state.append(node('span',row.status_label,`status ${row.status}`));
+        const state=node('td'),isVoid=row.void_status==='是';state.append(node('span',isVoid?'作废':row.status_label,`status ${isVoid?'void':row.status}`));
+        const voidSelect=node('select',undefined,'void-select');[['否','有效'],['是','作废']].forEach(([value,label])=>{const option=node('option',label);option.value=value;voidSelect.append(option)});voidSelect.value=row.void_status;voidSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 作废状态`);voidSelect.addEventListener('change',()=>{row.void_status=voidSelect.value;render()});state.append(voidSelect);
         const details=node('details'),summary=node('summary',`Word 信息与提示（${row.warnings.length}）`);details.append(summary);
         const info=node('div',`Word日期：${row.word_date||'—'}\nWord事由：${row.word_subject||'—'}\n致送单位：${row.recipient||'—'}`);details.append(info);
         if(row.warnings.length){const list=node('ul',undefined,'warnings');row.warnings.forEach(w=>list.append(node('li',w)));details.append(list)}
@@ -553,9 +545,8 @@ HTML_TEMPLATE = r'''<!doctype html>
       return tr;
     }
     $('refreshArchive').addEventListener('click',event=>refreshArchive(event.currentTarget));
-    $('savePrintStatuses').addEventListener('click',event=>savePrintStatuses(event.currentTarget));
-    $('startLocalAi').addEventListener('click',()=>controlLocalAi('start'));
-    $('stopLocalAi').addEventListener('click',()=>controlLocalAi('stop'));
+    $('saveManualStatuses').addEventListener('click',event=>saveManualStatuses(event.currentTarget));
+    $('checkLocalAi').addEventListener('click',checkLocalAi);
     $('manualEditCancel').addEventListener('click',()=>{$('manualEditDialog').close();activeManualEdit=null});
     $('manualEditApply').addEventListener('click',()=>{if(!activeManualEdit)return;const subject=$('manualSubjectInput').value.trim(),content=$('manualContentInput').value.trim();if(activeManualEdit.mode!=='content'&&!subject){alert('主题不能为空');return}if(activeManualEdit.mode!=='subject'&&!content){alert('需求内容不能为空');return}if(subject.length>120){alert('主题不能超过 120 个字符');return}if(content.length>4000){alert('需求内容不能超过 4000 个字符');return}const values={subject,content};activeManualEdit.apply(values);$('manualEditDialog').close();activeManualEdit=null});
     $('subjectActionCancel').addEventListener('click',()=>{$('subjectActionDialog').close();activeSubjectAction=null});

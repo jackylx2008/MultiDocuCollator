@@ -25,19 +25,20 @@ PLATFORM_ROOT_DEFAULTS = {
 
 
 def load_common_env(project_root: Path) -> None:
-    """载入 common.env，但不覆盖进程中已经设置的环境变量。"""
-    path = project_root / "common.env"
-    if not path.is_file():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    """优先载入 .env，再用 common.env 补齐，且不覆盖进程环境变量。"""
+    for file_name in (".env", "common.env"):
+        path = project_root / file_name
+        if not path.is_file():
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key:
-            os.environ.setdefault(key, value)
+        for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                os.environ.setdefault(key, value)
 
 
 def select_cloudstation_root(
@@ -117,11 +118,6 @@ def load_settings(project_root: Path) -> dict[str, Any]:
     flow = (data.get("flows") or {}).get("build_archive") or {}
     configured_data_root = str(flow.get("data_root") or "")
     data_root = os.environ.get("HOTEL_REQUIREMENTS_ROOT", "").strip()
-    def local_path(name: str, default: str) -> str:
-        value = os.environ.get(name, default).strip()
-        path = Path(value).expanduser()
-        return str(path if path.is_absolute() else project_root / path)
-
     return {
         "log_level": str(app.get("log_level") or "INFO"),
         "data_root": str(Path(data_root or configured_data_root).expanduser()),
@@ -134,29 +130,8 @@ def load_settings(project_root: Path) -> dict[str, Any]:
         "local_ai_model": os.environ.get(
             "LLAMACPP_MODEL", "Qwen3.8-27B-Q4_K_M.gguf"
         ).strip(),
-        "local_ai_autostart": os.environ.get(
-            "LLAMACPP_AUTOSTART", "true"
-        ).strip().lower() in {"1", "true", "yes", "on"},
-        "local_ai_server_path": os.environ.get("LLAMACPP_SERVER_PATH", "").strip(),
-        "local_ai_model_path": os.environ.get("LLAMACPP_MODEL_PATH", "").strip(),
-        "local_ai_mmproj_path": os.environ.get("LLAMACPP_MMPROJ_PATH", "").strip(),
-        "local_ai_n_gpu_layers": int(os.environ.get("LLAMACPP_N_GPU_LAYERS", "999")),
-        "local_ai_startup_timeout_sec": int(
-            os.environ.get("LLAMACPP_STARTUP_TIMEOUT_SEC", "180")
-        ),
-        "local_ai_startup_poll_interval_sec": float(
-            os.environ.get("LLAMACPP_STARTUP_POLL_INTERVAL_SEC", "1")
-        ),
+        "local_ai_api_key": os.environ.get("LLAMACPP_API_KEY", "").strip(),
         "local_ai_request_timeout_sec": int(
             os.environ.get("LLAMACPP_TIMEOUT_SEC", "180")
         ),
-        "local_ai_stdout_log_path": local_path(
-            "LLAMACPP_STDOUT_LOG_PATH", "log/llama_server.out.log"
-        ),
-        "local_ai_stderr_log_path": local_path(
-            "LLAMACPP_STDERR_LOG_PATH", "log/llama_server.err.log"
-        ),
-        "local_ai_extra_dll_dirs": os.environ.get(
-            "LLAMACPP_EXTRA_DLL_DIRS", ""
-        ).strip(),
     }

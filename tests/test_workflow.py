@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -50,17 +50,19 @@ from multidocu_collator.flows.new_content_draft_flow import (
 )
 from multidocu_collator.flows.update_print_status_flow import update_print_statuses
 from multidocu_collator.flows.update_record_content_flow import update_record_content
-from multidocu_collator.config_loader import expand_env, select_cloudstation_root
+from multidocu_collator.config_loader import (
+    expand_env,
+    load_common_env,
+    select_cloudstation_root,
+)
 from multidocu_collator.modules.repository import build_dataset
 from multidocu_collator.modules.scanner import scan_data_root
 from multidocu_collator.modules.summary_html import build_summary_view, export_summary_html
 from multidocu_collator.modules.validation import validate_dataset, validate_summary_html
 from multidocu_collator.modules.local_ai import (
-    _ensure_server,
     build_text_comparison,
     local_ai_status,
     proofread_official_content,
-    shutdown_local_ai,
 )
 
 
@@ -105,6 +107,23 @@ def make_template_docx(path: Path) -> None:
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_dotenv_has_priority_over_common_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            (project_root / ".env").write_text(
+                "LLAMACPP_API_KEY=dotenv-key\nDOTENV_ONLY=yes\n",
+                encoding="utf-8",
+            )
+            (project_root / "common.env").write_text(
+                "LLAMACPP_API_KEY=common-key\nCOMMON_ONLY=yes\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                load_common_env(project_root)
+                self.assertEqual(os.environ["LLAMACPP_API_KEY"], "dotenv-key")
+                self.assertEqual(os.environ["DOTENV_ONLY"], "yes")
+                self.assertEqual(os.environ["COMMON_ONLY"], "yes")
+
     def test_selects_cross_platform_cloudstation_roots(self) -> None:
         values = {
             "CLOUDSTATION_ROOT_WINDOWS": r"D:\CloudStation",
@@ -188,8 +207,10 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(summary["records"], 1)
             self.assertEqual(data["dataset_revision"], 1)
             self.assertEqual(data["records"][0]["需求单已经打印"], "否")
+            self.assertEqual(data["records"][0]["作废状态"], "否")
             rescanned_records = json.loads(json.dumps(records, ensure_ascii=False))
             data["records"][0]["需求单已经打印"] = "是"
+            data["records"][0]["作废状态"] = "是"
             preserved, _, _ = build_dataset(
                 root=root,
                 records=rescanned_records,
@@ -198,6 +219,7 @@ class WorkflowTests(unittest.TestCase):
                 previous=data,
             )
             self.assertEqual(preserved["records"][0]["需求单已经打印"], "是")
+            self.assertEqual(preserved["records"][0]["作废状态"], "是")
             _, changed_again, _ = build_dataset(
                 root=root,
                 records=rescanned_records,
@@ -237,6 +259,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("row.discipline===discipline", html)
             self.assertIn("row.print_status===printStatus", html)
             self.assertIn("row.status===status", html)
+            self.assertIn("row.void_status==='是'", html)
             self.assertIn("row.folder_href", html)
             self.assertIn("openDirectory(event,row)", html)
             self.assertIn("/api/open-path", html)
@@ -258,10 +281,15 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("<span>需求单已经打印</span>", html)
             self.assertIn('<option value="是">是</option>', html)
             self.assertIn('<option value="否">否</option>', html)
-            self.assertIn('id="savePrintStatuses"', html)
-            self.assertIn("/api/save-print-status", html)
-            self.assertIn("savePrintStatuses(event.currentTarget)", html)
-            save_script = html.split("async function savePrintStatuses", 1)[1].split(
+            self.assertIn('id="saveManualStatuses"', html)
+            self.assertIn("保存修改内容", html)
+            self.assertIn("/api/save-manual-statuses", html)
+            self.assertIn("saveManualStatuses(event.currentTarget)", html)
+            self.assertIn("void_statuses", html)
+            self.assertIn("void-row", html)
+            self.assertIn("repeating-linear-gradient", html)
+            self.assertIn("rgba(108,116,124,.28) 10px 14px", html)
+            save_script = html.split("async function saveManualStatuses", 1)[1].split(
                 "async function deleteRecord", 1
             )[0]
             self.assertNotIn("location.reload()", save_script)
@@ -277,12 +305,14 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("subject,requirement_content:content", html)
             self.assertIn("/api/proofread-content", html)
             self.assertIn("/api/local-ai-status", html)
-            self.assertIn("/api/${action}-local-ai", html)
+            self.assertNotIn("/api/start-local-ai", html)
+            self.assertNotIn("/api/stop-local-ai", html)
             self.assertIn('id="aiLight"', html)
-            self.assertIn('id="startLocalAi"', html)
-            self.assertIn('id="stopLocalAi"', html)
-            self.assertIn("aiStartupTimer=setInterval(update,1000)", html)
-            self.assertIn("启动中 ${seconds} 秒", html)
+            self.assertIn('id="checkLocalAi"', html)
+            self.assertIn("检查本地 AI", html)
+            self.assertNotIn('id="startLocalAi"', html)
+            self.assertNotIn('id="stopLocalAi"', html)
+            self.assertNotIn("controlLocalAi", html)
             self.assertIn('id="aiDialog"', html)
             self.assertIn('id="aiOriginalContent"', html)
             self.assertIn('class="comparison-grid"', html)
@@ -405,6 +435,7 @@ class WorkflowTests(unittest.TestCase):
                         "status": "complete",
                         "warnings": [],
                         "需求单已经打印": "否",
+                        "作废状态": "否",
                     }
                 ],
                 "changes": [],
@@ -415,14 +446,23 @@ class WorkflowTests(unittest.TestCase):
 
             result = update_print_statuses(
                 context,
-                {"dataset_revision": 3, "statuses": {"record-1": "是"}},
+                {
+                    "dataset_revision": 3,
+                    "statuses": {"record-1": "是"},
+                    "void_statuses": {"record-1": "是"},
+                },
             )
             saved = json.loads(context.json_path.read_text(encoding="utf-8"))
-            self.assertEqual(result["changed"], 1)
+            self.assertEqual(result["changed"], 2)
+            self.assertEqual(result["changed_print"], 1)
+            self.assertEqual(result["changed_void"], 1)
             self.assertEqual(result["dataset_revision"], 4)
             self.assertEqual(saved["records"][0]["需求单已经打印"], "是")
-            self.assertEqual(saved["changes"][-1]["action"], "print_status_updated")
+            self.assertEqual(saved["records"][0]["作废状态"], "是")
+            self.assertEqual(saved["changes"][-2]["action"], "print_status_updated")
+            self.assertEqual(saved["changes"][-1]["action"], "void_status_updated")
             self.assertIn('"print_status":"是"', context.html_path.read_text(encoding="utf-8"))
+            self.assertIn('"void_status":"是"', context.html_path.read_text(encoding="utf-8"))
 
             with self.assertRaisesRegex(ValueError, "页面数据已经更新"):
                 update_print_statuses(
@@ -436,10 +476,11 @@ class WorkflowTests(unittest.TestCase):
             data_root=PROJECT_ROOT,
             json_name="data.json",
             html_name="summary.html",
+            local_ai_api_key="test-token",
         )
         with patch(
             "multidocu_collator.modules.local_ai._healthcheck",
-            return_value=[context.local_ai_model],
+            return_value=[context.local_ai_model.removesuffix(".gguf")],
         ):
             status = local_ai_status(context, system_name="Windows")
         self.assertTrue(status["available"])
@@ -450,8 +491,8 @@ class WorkflowTests(unittest.TestCase):
             missing_status = local_ai_status(context, system_name="Windows")
         self.assertFalse(missing_status["available"])
         with patch(
-            "multidocu_collator.modules.local_ai._ensure_server",
-            return_value=[context.local_ai_model],
+            "multidocu_collator.modules.local_ai._healthcheck",
+            return_value=[context.local_ai_model.removesuffix(".gguf")],
         ), patch(
             "multidocu_collator.modules.local_ai._request_json",
             return_value={
@@ -471,6 +512,11 @@ class WorkflowTests(unittest.TestCase):
             )
         self.assertEqual(revised, "请相关单位复核并书面回复。")
         self.assertFalse(request.call_args.kwargs["payload"]["stream"])
+        self.assertEqual(
+            request.call_args.kwargs["payload"]["model"],
+            context.local_ai_model.removesuffix(".gguf"),
+        )
+        self.assertEqual(request.call_args.kwargs["api_key"], "test-token")
         system_prompt = request.call_args.kwargs["payload"]["messages"][0]["content"]
         self.assertIn("优化句式、语序和逻辑衔接", system_prompt)
         self.assertIn("准确、简洁、庄重的公文用语", system_prompt)
@@ -479,7 +525,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("如果输入中出现则删除", system_prompt)
         self.assertIn("如果输入中没有也不得新增", system_prompt)
         with patch(
-            "multidocu_collator.modules.local_ai._ensure_server",
+            "multidocu_collator.modules.local_ai._healthcheck",
             return_value=[context.local_ai_model],
         ), patch(
             "multidocu_collator.modules.local_ai._request_json",
@@ -520,43 +566,21 @@ class WorkflowTests(unittest.TestCase):
                 system_name="Linux",
             )
 
-    def test_llamacpp_service_autostarts_and_is_managed(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            server = root / "llama-server.exe"
-            model = root / "model.gguf"
-            mmproj = root / "mmproj.gguf"
-            for path in (server, model, mmproj):
-                path.write_bytes(b"test")
-            context = AppContext(
-                project_root=root,
-                data_root=root,
-                json_name="data.json",
-                html_name="summary.html",
-                local_ai_model="model.gguf",
-                local_ai_server_path=str(server),
-                local_ai_model_path=str(model),
-                local_ai_mmproj_path=str(mmproj),
-                local_ai_startup_timeout_sec=2,
-                local_ai_startup_poll_interval_sec=0.01,
-                local_ai_stdout_log_path=str(root / "stdout.log"),
-                local_ai_stderr_log_path=str(root / "stderr.log"),
-            )
-            process = MagicMock()
-            process.poll.return_value = None
-            with patch(
-                "multidocu_collator.modules.local_ai._healthcheck",
-                side_effect=[RuntimeError("未启动"), RuntimeError("未启动"), ["model.gguf"]],
-            ), patch(
-                "multidocu_collator.modules.local_ai.subprocess.Popen",
-                return_value=process,
-            ) as popen:
-                self.assertEqual(_ensure_server(context), ["model.gguf"])
-            command = popen.call_args.args[0]
-            self.assertEqual(command[0], str(server))
-            self.assertIn("--mmproj", command)
-            shutdown_local_ai()
-            process.terminate.assert_called_once()
+    def test_llamacpp_status_only_checks_external_service(self) -> None:
+        context = AppContext(
+            project_root=PROJECT_ROOT,
+            data_root=PROJECT_ROOT,
+            json_name="data.json",
+            html_name="summary.html",
+        )
+        with patch(
+            "multidocu_collator.modules.local_ai._healthcheck",
+            side_effect=RuntimeError("连接被拒绝"),
+        ) as healthcheck:
+            status = local_ai_status(context, system_name="Windows")
+        self.assertFalse(status["available"])
+        self.assertIn("未启用或不可用", status["message"])
+        healthcheck.assert_called_once_with(context)
 
     def test_resolves_only_relative_directory_inside_data_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -674,26 +698,20 @@ class WorkflowTests(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch(
-                    "multidocu_collator.flows.summary_server_flow.start_local_ai",
-                    return_value={"available": True, "managed": True},
-                ) as starter:
-                    with urllib.request.urlopen(start_request, timeout=3) as response:
-                        self.assertEqual(response.status, 200)
-                    starter.assert_called_once_with(context)
+                with self.assertRaises(urllib.error.HTTPError) as start_error:
+                    urllib.request.urlopen(start_request, timeout=3)
+                self.assertEqual(start_error.exception.code, 404)
+                start_error.exception.close()
                 stop_request = urllib.request.Request(
                     base + "/api/stop-local-ai",
                     data=b"{}",
                     headers={"Content-Type": "application/json"},
                     method="POST",
                 )
-                with patch(
-                    "multidocu_collator.flows.summary_server_flow.stop_local_ai",
-                    return_value={"available": False, "managed": False},
-                ) as stopper:
-                    with urllib.request.urlopen(stop_request, timeout=3) as response:
-                        self.assertEqual(response.status, 200)
-                    stopper.assert_called_once_with(context)
+                with self.assertRaises(urllib.error.HTTPError) as stop_error:
+                    urllib.request.urlopen(stop_request, timeout=3)
+                self.assertEqual(stop_error.exception.code, 404)
+                stop_error.exception.close()
                 request = urllib.request.Request(
                     base + "/api/open-path",
                     data=json.dumps({"path": folder.name}).encode("utf-8"),
@@ -746,9 +764,10 @@ class WorkflowTests(unittest.TestCase):
                 print_payload = {
                     "dataset_revision": 1,
                     "statuses": {"id": "是"},
+                    "void_statuses": {"id": "是"},
                 }
                 print_request = urllib.request.Request(
-                    base + "/api/save-print-status",
+                    base + "/api/save-manual-statuses",
                     data=json.dumps(print_payload).encode("utf-8"),
                     headers={"Content-Type": "application/json"},
                     method="POST",
