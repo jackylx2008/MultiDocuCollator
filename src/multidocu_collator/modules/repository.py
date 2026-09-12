@@ -50,6 +50,10 @@ def build_dataset(
             "是" if old_record.get("需求单已经打印") == "是" else "否"
         )
         record["作废状态"] = "是" if old_record.get("作废状态") == "是" else "否"
+        record["是否需要变更"] = "是" if old_record.get("是否需要变更") == "是" else "否"
+        record["现场是否已经完成"] = (
+            "是" if old_record.get("现场是否已经完成") == "是" else "否"
+        )
     new_map = _record_map(records)
     added = len(new_map.keys() - old_map.keys())
     removed = len(old_map.keys() - new_map.keys())

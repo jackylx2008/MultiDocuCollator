@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
+import uuid
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -64,6 +66,7 @@ from multidocu_collator.modules.local_ai import (
     local_ai_status,
     proofread_official_content,
 )
+from multidocu_collator.modules.archive_migration import migrate_archive
 
 
 DOCUMENT_XML = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -107,6 +110,90 @@ def make_template_docx(path: Path) -> None:
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_migrates_records_and_writes_offline_index(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source"
+            destination = root / "destination"
+            record_dir = source / "暖通空调-001-2026-01-01_测试"
+            record_dir.mkdir(parents=True)
+            (record_dir / "附件.pdf").write_bytes(b"pdf")
+            (source / "酒店需求工作联系单数据.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "records": [
+                            {
+                                "record_id": str(
+                                    uuid.uuid5(
+                                        uuid.NAMESPACE_URL,
+                                        "hotel-requirement:暖通空调:001",
+                                    )
+                                ),
+                                "需求单已经打印": "是",
+                                "作废状态": "否",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            result = migrate_archive(source, destination)
+            copied = (
+                destination
+                / "暖通空调"
+                / record_dir.name
+                / "附件.pdf"
+            )
+            self.assertEqual(result["records"], 1)
+            self.assertTrue(copied.is_file())
+            self.assertTrue(Path(result["json_path"]).is_file())
+            migrated = json.loads(Path(result["json_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(migrated["records"][0]["需求单已经打印"], "是")
+            html = Path(result["html_path"]).read_text(encoding="utf-8")
+            self.assertIn("导出当前 JSON", html)
+            self.assertIn("暖通空调/暖通空调-001-2026-01-01_测试", html)
+            self.assertIn('id="disciplineFilter"', html)
+            self.assertIn('id="changeFilter"', html)
+            self.assertIn("是否需要出变更", html)
+            self.assertIn("localeCompare(String(b.document_code", html)
+            self.assertIn("tbody tr{height:92px}", html)
+            self.assertIn("table-layout:fixed;font-size:14px", html)
+            self.assertIn("class=\"cell-scroll\"", html)
+            self.assertIn("class=\"subject-link\"", html)
+            self.assertIn("roleLabel(f)", html)
+            self.assertNotIn(">${esc(f.name)}</a>", html)
+
+    def test_migration_skips_locked_file_and_keeps_other_attachments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source"
+            destination = root / "destination"
+            record_dir = source / "暖通空调-002-2026-01-02_测试"
+            record_dir.mkdir(parents=True)
+            (record_dir / "可复制.pdf").write_bytes(b"pdf")
+            (record_dir / "被占用.dwg").write_bytes(b"dwg")
+            real_copy2 = shutil.copy2
+
+            def copy_with_locked_file(source_file: object, destination_file: object, *args: object, **kwargs: object) -> object:
+                if Path(source_file).name == "被占用.dwg":
+                    raise PermissionError("file is in use")
+                return real_copy2(source_file, destination_file, *args, **kwargs)
+
+            with patch(
+                "multidocu_collator.modules.archive_migration.shutil.copy2",
+                side_effect=copy_with_locked_file,
+            ):
+                result = migrate_archive(source, destination)
+
+            target = destination / "暖通空调" / record_dir.name
+            self.assertTrue((target / "可复制.pdf").is_file())
+            self.assertFalse((target / "被占用.dwg").exists())
+            self.assertEqual(len(result["copy_warnings"]), 1)
+            migrated = json.loads(Path(result["json_path"]).read_text(encoding="utf-8"))
+            self.assertTrue(any("被占用.dwg" in warning for warning in migrated["records"][0]["warnings"]))
+
     def test_dotenv_has_priority_over_common_env(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
@@ -260,6 +347,11 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("row.print_status===printStatus", html)
             self.assertIn("row.status===status", html)
             self.assertIn("row.void_status==='是'", html)
+            self.assertIn("row.change_required", html)
+            self.assertIn("row.site_completed", html)
+            self.assertIn("<th>是否需要变更</th><th>现场是否已经完成</th>", html)
+            self.assertIn("th:nth-child(11),td:nth-child(11)", html)
+            self.assertIn("min-height:70px", html)
             self.assertIn("row.folder_href", html)
             self.assertIn("openDirectory(event,row)", html)
             self.assertIn("/api/open-path", html)
@@ -286,6 +378,8 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("/api/save-manual-statuses", html)
             self.assertIn("saveManualStatuses(event.currentTarget)", html)
             self.assertIn("void_statuses", html)
+            self.assertIn("change_required", html)
+            self.assertIn("site_completed", html)
             self.assertIn("void-row", html)
             self.assertIn("repeating-linear-gradient", html)
             self.assertIn("rgba(108,116,124,.28) 10px 14px", html)
@@ -436,6 +530,8 @@ class WorkflowTests(unittest.TestCase):
                         "warnings": [],
                         "需求单已经打印": "否",
                         "作废状态": "否",
+                        "是否需要变更": "否",
+                        "现场是否已经完成": "否",
                     }
                 ],
                 "changes": [],
@@ -450,17 +546,25 @@ class WorkflowTests(unittest.TestCase):
                     "dataset_revision": 3,
                     "statuses": {"record-1": "是"},
                     "void_statuses": {"record-1": "是"},
+                    "change_required": {"record-1": "是"},
+                    "site_completed": {"record-1": "是"},
                 },
             )
             saved = json.loads(context.json_path.read_text(encoding="utf-8"))
-            self.assertEqual(result["changed"], 2)
+            self.assertEqual(result["changed"], 4)
             self.assertEqual(result["changed_print"], 1)
             self.assertEqual(result["changed_void"], 1)
+            self.assertEqual(result["changed_change_required"], 1)
+            self.assertEqual(result["changed_site_completed"], 1)
             self.assertEqual(result["dataset_revision"], 4)
             self.assertEqual(saved["records"][0]["需求单已经打印"], "是")
             self.assertEqual(saved["records"][0]["作废状态"], "是")
-            self.assertEqual(saved["changes"][-2]["action"], "print_status_updated")
-            self.assertEqual(saved["changes"][-1]["action"], "void_status_updated")
+            self.assertEqual(saved["records"][0]["是否需要变更"], "是")
+            self.assertEqual(saved["records"][0]["现场是否已经完成"], "是")
+            self.assertEqual(saved["changes"][-4]["action"], "print_status_updated")
+            self.assertEqual(saved["changes"][-3]["action"], "void_status_updated")
+            self.assertEqual(saved["changes"][-2]["action"], "change_required_updated")
+            self.assertEqual(saved["changes"][-1]["action"], "site_completed_updated")
             self.assertIn('"print_status":"是"', context.html_path.read_text(encoding="utf-8"))
             self.assertIn('"void_status":"是"', context.html_path.read_text(encoding="utf-8"))
 

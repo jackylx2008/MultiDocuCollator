@@ -132,7 +132,7 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     return
                 if route in {"/api/save-print-status", "/api/save-manual-statuses"}:
                     result = update_print_statuses(context, payload)
-                    logger.info("已保存 %d 项打印或作废状态修改", result["changed"])
+                    logger.info("已保存 %d 项人工状态修改", result["changed"])
                     self._send_json(HTTPStatus.OK, result)
                     return
                 if route == "/api/update-record-content":

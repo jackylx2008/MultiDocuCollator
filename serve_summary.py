@@ -1,7 +1,8 @@
 """酒店需求工作联系单本地 HTML 汇总服务。
 
 用途：
-  在 127.0.0.1 的动态端口打开正式 HTML 汇总。点击“主题”链接时，由服务根据
+  启动时先扫描实际资料目录并重建 JSON/HTML，再在 127.0.0.1 的动态端口打开正式
+  HTML 汇总。点击“主题”链接时，由服务根据
   当前系统的 CloudStation 根目录定位资料，并使用 Finder、Windows 资源管理器
   或 Linux 默认文件管理器打开对应目录。汇总表末行还可提交新联系单，服务使用
   同级 DOCX 模板创建文档并通过 Microsoft Word 导出 PDF，随后刷新 JSON/HTML；
@@ -39,6 +40,7 @@ if str(SRC_DIR) not in sys.path:
 from logging_config import setup_logger
 from multidocu_collator.config_loader import load_settings
 from multidocu_collator.context import AppContext
+from multidocu_collator.flows.build_archive_flow import run_build_archive
 from multidocu_collator.flows.summary_server_flow import run_summary_server
 
 
@@ -64,6 +66,8 @@ def main() -> int:
         local_ai_request_timeout_sec=settings["local_ai_request_timeout_sec"],
     )
     try:
+        # 服务启动时先从实际资料目录重建 JSON/HTML，避免打开过期页面。
+        run_build_archive(context)
         run_summary_server(context, open_browser=not args.no_browser)
     except Exception as exc:
         print(f"本地汇总服务启动失败：{exc}", file=sys.stderr)

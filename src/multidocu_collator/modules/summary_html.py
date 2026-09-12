@@ -87,6 +87,8 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
                     "是" if record.get("需求单已经打印") == "是" else "否"
                 ),
                 "void_status": "是" if record.get("作废状态") == "是" else "否",
+                "change_required": "是" if record.get("是否需要变更") == "是" else "否",
+                "site_completed": "是" if record.get("现场是否已经完成") == "是" else "否",
                 "status": record.get("status") or "",
                 "status_label": STATUS_LABELS.get(
                     str(record.get("status") or ""), str(record.get("status") or "")
@@ -165,31 +167,33 @@ HTML_TEMPLATE = r'''<!doctype html>
     .visible-count { margin-left:auto; color:var(--muted); font-size:14px; }
     .table-wrap { max-height:calc(100vh - 270px); overflow:auto; border:1px solid var(--line); border-top:0; background:white; }
     table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; font-size:13px; }
-    th { position:sticky; top:0; z-index:2; padding:10px 7px; color:white; background:var(--navy); text-align:left; }
-    .column-header { display:flex; flex-direction:column; gap:6px; }
-    .column-filter { width:100%; min-height:30px; padding:3px 5px; color:#17212b; border-color:#91a8ba; border-radius:5px; font-size:12px; font-weight:400; }
-    td { padding:9px 7px; border-right:1px solid #edf1f4; border-bottom:1px solid #e5eaee; vertical-align:top; overflow-wrap:anywhere; white-space:pre-line; }
+    th { position:sticky; top:0; z-index:2; padding:6px 5px; color:white; background:var(--navy); text-align:left; }
+    .column-header { display:flex; flex-direction:column; gap:3px; }
+    .column-filter { width:100%; min-height:26px; padding:2px 4px; color:#17212b; border-color:#91a8ba; border-radius:5px; font-size:12px; font-weight:400; }
+    td { padding:6px 5px; border-right:1px solid #edf1f4; border-bottom:1px solid #e5eaee; vertical-align:top; overflow-wrap:anywhere; white-space:pre-line; }
     tbody tr:hover { background:#f7fbff; }
     tbody tr.void-row td { position:relative; }
     tbody tr.void-row td::after { content:""; position:absolute; z-index:4; inset:0; pointer-events:none; background:repeating-linear-gradient(135deg,transparent 0 10px,rgba(108,116,124,.28) 10px 14px); }
     .subject-link { color:#174d7a; font-weight:600; text-decoration:none; }
     .subject-link:hover { color:#0c6db2; text-decoration:underline; }
-    th:nth-child(1),td:nth-child(1) { width:4%; text-align:center; }
-    th:nth-child(2),td:nth-child(2) { width:7%; }
-    th:nth-child(3),td:nth-child(3) { width:5%; text-align:center; }
-    th:nth-child(4),td:nth-child(4) { width:8%; }
-    th:nth-child(5),td:nth-child(5) { width:11%; }
-    th:nth-child(6),td:nth-child(6) { width:13%; }
-    th:nth-child(7),td:nth-child(7) { width:21%; }
-    th:nth-child(8),td:nth-child(8) { width:14%; }
-    th:nth-child(9),td:nth-child(9) { width:8%; text-align:center; }
-    th:nth-child(10),td:nth-child(10) { width:9%; }
+    th:nth-child(1),td:nth-child(1) { width:3.6%; text-align:center; }
+    th:nth-child(2),td:nth-child(2) { width:6%; }
+    th:nth-child(3),td:nth-child(3) { width:4.5%; text-align:center; }
+    th:nth-child(4),td:nth-child(4) { width:7.2%; }
+    th:nth-child(5),td:nth-child(5) { width:9.9%; }
+    th:nth-child(6),td:nth-child(6) { width:11.7%; }
+    th:nth-child(7),td:nth-child(7) { width:17%; }
+    th:nth-child(8),td:nth-child(8) { width:11%; }
+    th:nth-child(9),td:nth-child(9) { width:6.5%; text-align:center; }
+    th:nth-child(10),td:nth-child(10) { width:7%; text-align:center; }
+    th:nth-child(11),td:nth-child(11) { width:8%; text-align:center; }
+    th:nth-child(12),td:nth-child(12) { width:7.6%; }
     .content { max-height:9.2em; overflow:auto; line-height:1.55; }
-    .content-editor textarea { width:100%; min-height:108px; padding:7px; resize:vertical; line-height:1.55; }
+    .content-editor textarea { width:100%; min-height:70px; padding:5px; resize:vertical; line-height:1.45; }
     .content-editor textarea[readonly],.new-row textarea[readonly] { cursor:pointer; background:#fbfdff; }
     .content-editor textarea[readonly]:hover,.new-row textarea[readonly]:hover { border-color:var(--blue); box-shadow:0 0 0 2px #2c6c9118; }
-    .content-actions { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
-    .content-button { flex:1; min-width:76px; padding:6px 5px; border:1px solid #9eb5c7; border-radius:6px; color:#174d7a; background:#f4f9fc; cursor:pointer; font-size:12px; font-weight:700; }
+    .content-actions { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+    .content-button { flex:1; min-width:66px; padding:4px; border:1px solid #9eb5c7; border-radius:6px; color:#174d7a; background:#f4f9fc; cursor:pointer; font-size:12px; font-weight:700; }
     .content-button:hover { color:white; background:var(--blue); }
     .content-button:disabled { opacity:.55; cursor:not-allowed; }
     .content-save-button { color:var(--ok); border-color:#9fcab3; background:#f0faf5; }
@@ -209,8 +213,8 @@ HTML_TEMPLATE = r'''<!doctype html>
     .status.incomplete { color:var(--bad); background:#fdeaea; }
     .status.void { color:white; background:#6f7479; }
     .print-save-button { background:var(--ok); }
-    .print-select { width:100%; min-width:62px; }
-    .void-select { width:100%; min-width:78px; margin-top:7px; }
+    .print-select { width:100%; min-width:52px; min-height:32px; padding:4px; }
+    .void-select { width:100%; min-width:64px; min-height:32px; margin-top:4px; padding:4px; }
     details { margin-top:7px; color:var(--muted); }
     summary { cursor:pointer; color:#36566f; }
     .warnings { margin:6px 0 0; padding-left:18px; color:#8a4e00; white-space:normal; }
@@ -283,7 +287,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     <section class="toolbar">
       <input id="search" type="search" placeholder="搜索专业、编号、日期、致送单位、主题、需求内容……">
       <button id="refreshArchive" class="refresh-button" type="button" title="重新扫描实际资料目录并更新 JSON/HTML">重新扫描刷新</button>
-      <button id="saveManualStatuses" class="refresh-button print-save-button" type="button" title="保存需求单打印标记和作废状态标记">保存修改内容</button>
+      <button id="saveManualStatuses" class="refresh-button print-save-button" type="button" title="保存打印、作废、变更和现场完成状态标记">保存修改内容</button>
       <div class="ai-controls" title="绿色表示 API 可用，红色表示不可用，黄色表示正在检查">
         <span id="aiLight" class="ai-light" role="status" aria-label="本地 AI 等待检查"></span>
         <span id="aiState" class="ai-state">本地 AI：等待检查</span>
@@ -298,6 +302,7 @@ HTML_TEMPLATE = r'''<!doctype html>
           <th><div class="column-header"><span>专业</span><select id="disciplineFilter" class="column-filter" aria-label="按专业筛选"><option value="">全部专业</option></select></div></th>
           <th>编号</th><th>目录日期</th><th>致送单位</th><th>主题</th><th>需求内容</th><th>资料文件</th>
           <th><div class="column-header"><span>需求单已经打印</span><select id="printFilter" class="column-filter" aria-label="按需求单打印标记筛选"><option value="">全部</option><option value="是">是</option><option value="否">否</option></select></div></th>
+          <th>是否需要变更</th><th>现场是否已经完成</th>
           <th><div class="column-header"><span>状态 / 核对</span><select id="statusFilter" class="column-filter" aria-label="按状态筛选"><option value="">全部状态</option><option value="complete">资料齐全</option><option value="needs_review">待核对</option><option value="incomplete">资料不完整</option><option value="void">作废</option></select></div></th>
         </tr></thead>
         <tbody id="body"></tbody>
@@ -451,10 +456,12 @@ HTML_TEMPLATE = r'''<!doctype html>
       if(!isLocalService()){alert('保存修改内容需要通过 serve_summary.py 打开本页面。');return}
       const statuses=Object.fromEntries(data.rows.map(row=>[row.record_id,row.print_status]));
       const void_statuses=Object.fromEntries(data.rows.map(row=>[row.record_id,row.void_status]));
+      const change_required=Object.fromEntries(data.rows.map(row=>[row.record_id,row.change_required]));
+      const site_completed=Object.fromEntries(data.rows.map(row=>[row.record_id,row.site_completed]));
       const tableWrap=document.querySelector('.table-wrap'),tableScrollTop=tableWrap.scrollTop,pageScrollX=window.scrollX,pageScrollY=window.scrollY;
       button.disabled=true;button.textContent='正在保存…';
       try{
-        const response=await fetch('/api/save-manual-statuses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,statuses,void_statuses})});
+        const response=await fetch('/api/save-manual-statuses',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,statuses,void_statuses,change_required,site_completed})});
         const result=await response.json();
         if(!response.ok)throw new Error(result.error||'保存失败');
         data.dataset_revision=Number(result.dataset_revision);$('subtitle').textContent=`数据版本 ${data.dataset_revision} · 生成时间 ${data.generated_at}`;button.disabled=false;button.textContent=result.changed?`已保存 ${result.changed} 项修改`:'没有变更';requestAnimationFrame(()=>{tableWrap.scrollTop=tableScrollTop;window.scrollTo(pageScrollX,pageScrollY)});setTimeout(()=>{button.textContent='保存修改内容'},1500);
@@ -489,6 +496,8 @@ HTML_TEMPLATE = r'''<!doctype html>
         row.files.forEach(file=>{const a=node('a',file.role_label,`file${file.kind_class?' '+file.kind_class:''}`);a.href=file.href;a.title=`${file.name}\n文件类型：${file.type_label}\n左键复制，可在其他位置粘贴`;a.addEventListener('click',event=>copyFile(event,file,a));files.append(a)});fileCell.append(files);tr.append(fileCell);
         const printCell=node('td'),printSelect=node('select',undefined,'print-select');
         ['否','是'].forEach(value=>{const option=node('option',value);option.value=value;printSelect.append(option)});printSelect.value=row.print_status;printSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求单已经打印`);printSelect.addEventListener('change',()=>{row.print_status=printSelect.value});printCell.append(printSelect);tr.append(printCell);
+        const changeCell=node('td'),changeSelect=node('select',undefined,'print-select');['否','是'].forEach(value=>{const option=node('option',value);option.value=value;changeSelect.append(option)});changeSelect.value=row.change_required;changeSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 是否需要变更`);changeSelect.addEventListener('change',()=>{row.change_required=changeSelect.value});changeCell.append(changeSelect);tr.append(changeCell);
+        const completedCell=node('td'),completedSelect=node('select',undefined,'print-select');['否','是'].forEach(value=>{const option=node('option',value);option.value=value;completedSelect.append(option)});completedSelect.value=row.site_completed;completedSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 现场是否已经完成`);completedSelect.addEventListener('change',()=>{row.site_completed=completedSelect.value});completedCell.append(completedSelect);tr.append(completedCell);
         const state=node('td'),isVoid=row.void_status==='是';state.append(node('span',isVoid?'作废':row.status_label,`status ${isVoid?'void':row.status}`));
         const voidSelect=node('select',undefined,'void-select');[['否','有效'],['是','作废']].forEach(([value,label])=>{const option=node('option',label);option.value=value;voidSelect.append(option)});voidSelect.value=row.void_status;voidSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 作废状态`);voidSelect.addEventListener('change',()=>{row.void_status=voidSelect.value;render()});state.append(voidSelect);
         const details=node('details'),summary=node('summary',`Word 信息与提示（${row.warnings.length}）`);details.append(summary);
@@ -527,6 +536,8 @@ HTML_TEMPLATE = r'''<!doctype html>
       const subject=field('textarea','subject','点击弹窗填写主题');subject.value='关于   的事宜';subject.readOnly=true;subject.title='点击弹窗填写主题';subject.addEventListener('click',()=>openManualEditor({mode:'subject',subject:subject.value,content:content.value,apply:values=>{subject.value=values.subject}}));const subjectCell=node('td');subjectCell.append(subject);tr.append(subjectCell);
       const content=field('textarea','requirement_content','点击弹窗填写需求内容'),draftAiButton=node('button','AI 公文勘误','draft-button draft-ai-button ai-button'),draftButton=node('button','临时保存内容','draft-button'),draftNote=node('span','AI 修订或临时保存都不会生成 Word/PDF','draft-note'),draftActions=node('div',undefined,'draft-actions');content.readOnly=true;content.title='点击弹窗填写需求内容';content.addEventListener('click',()=>openManualEditor({mode:'content',subject:subject.value,content:content.value,apply:values=>{content.value=values.content}}));draftAiButton.type='button';draftAiButton.disabled=!aiAvailable;draftAiButton.addEventListener('click',()=>proofreadContent(null,content,draftAiButton,()=>{draftNote.textContent='AI 修订稿已回填；如需保留，请点击“临时保存内容”'}));draftButton.type='button';draftButton.title='保存到项目本地草稿，重启服务后仍可恢复';draftButton.addEventListener('click',()=>saveNewContentDraft(content,draftButton,draftNote));draftActions.append(draftAiButton,draftButton);const contentCell=node('td');contentCell.append(content,draftActions,draftNote);tr.append(contentCell);loadNewContentDraft(content,draftNote);
       const fileCell=node('td','保存后自动创建目录、DOCX 和 PDF');tr.append(fileCell);
+      tr.append(node('td','否'));
+      tr.append(node('td','否'));
       tr.append(node('td','否'));
       const actionCell=node('td'),button=node('button','保存','save-button'),note=node('span','编号可自动生成，也可手填','save-note');button.type='button';actionCell.append(button,note);tr.append(actionCell);
       if(data.disciplines.length){discipline.value=data.disciplines[0];sequence.value=suggestedSequence(discipline.value)}
