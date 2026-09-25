@@ -98,6 +98,19 @@ Windows PowerShell 将第一条命令替换为：
 Windows 可直接双击项目根目录的 `build_archive.cmd`：脚本会先更新 JSON/HTML，
 构建成功后继续启动 `serve_summary.py` 并自动打开浏览器。
 
+也可以双击项目根目录生成的 `酒店需求工作联系单汇总.exe`。EXE 会读取其同目录的
+`config.yaml`、`.env` 或 `common.env`，并将运行日志写入同目录的 `logs/`。重新构建
+EXE 前安装构建依赖，然后运行打包脚本：
+
+```powershell
+python -m venv .build-venv
+.\.build-venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\build_serve_summary_exe.ps1
+```
+
+程序图标源文件和 Windows ICO 位于 `assets/`。打包使用控制台模式，运行期间请保留
+控制台窗口；关闭服务时在窗口中按 `Ctrl+C`。
+
 ## 迁移存档
 
 需要把现有存档复制到另一块磁盘或长期归档目录时，使用根目录的
@@ -386,6 +399,9 @@ validate_archive.py              独立校验入口
 serve_summary.py                 本地汇总、目录打开及新增联系单入口
 logging_config.py                统一控制台及滚动文件日志
 requirements.txt                Python 运行依赖（PDF 页面合并）
+requirements-build.txt          Windows EXE 构建依赖
+build_serve_summary_exe.ps1     生成带项目图标的单文件 Windows EXE
+assets/                         应用图标 PNG/ICO
 src/multidocu_collator/modules/  DOCX 解析/生成、Word PDF、扫描、HTML、校验
 src/multidocu_collator/flows/    扫描建库、新增联系单及服务编排
 tests/                           单元和集成测试

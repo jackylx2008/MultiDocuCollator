@@ -32,12 +32,20 @@ import argparse
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+
+def _application_root() -> Path:
+    """源码运行时返回项目目录，冻结后返回 EXE 所在目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+PROJECT_ROOT = _application_root()
 SRC_DIR = PROJECT_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
+if not getattr(sys, "frozen", False) and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from logging_config import setup_logger
+from logging_config import configure_utf8_stdio, setup_logger
 from multidocu_collator.config_loader import load_settings
 from multidocu_collator.context import AppContext
 from multidocu_collator.flows.build_archive_flow import run_build_archive
@@ -45,6 +53,7 @@ from multidocu_collator.flows.summary_server_flow import run_summary_server
 
 
 def main() -> int:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .conda/
+.build-venv/
 .vscode/
 .DS_Store
 common.env
@@ -11,3 +12,6 @@ log/
 output/
 .pytest_cache/
 .coverage
+build/
+*.spec
+*.exe
