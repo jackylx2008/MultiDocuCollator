@@ -16,6 +16,8 @@ from unittest.mock import patch
 from xml.etree import ElementTree as ET
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from pypdf import PdfReader, PdfWriter
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
@@ -33,7 +35,11 @@ from multidocu_collator.modules.desktop import (
     resolve_relative_directory,
     resolve_relative_file,
 )
-from multidocu_collator.modules.pdf_exporter import WINDOWS_SCRIPT, export_pdf_with_word
+from multidocu_collator.modules.pdf_exporter import (
+    WINDOWS_SCRIPT,
+    export_pdf_with_word,
+    replace_pdf_first_page,
+)
 from multidocu_collator.context import AppContext
 from multidocu_collator.flows.create_record_flow import (
     _validated_payload,
@@ -107,6 +113,19 @@ def make_template_docx(path: Path) -> None:
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
         archive.writestr("word/document.xml", TEMPLATE_XML)
         archive.writestr("custom/unchanged.bin", b"unchanged")
+
+
+def make_test_pdf(path: Path, widths: list[int]) -> None:
+    writer = PdfWriter()
+    for width in widths:
+        writer.add_blank_page(width=width, height=800)
+    with path.open("wb") as stream:
+        writer.write(stream)
+
+
+def pdf_widths(path: Path) -> list[int]:
+    with path.open("rb") as stream:
+        return [int(page.mediabox.width) for page in PdfReader(stream).pages]
 
 
 class WorkflowTests(unittest.TestCase):
@@ -1197,6 +1216,25 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(environment["MULTIDOCU_INPUT_PATH"], str(docx.resolve()))
             self.assertEqual(environment["MULTIDOCU_OUTPUT_PATH"], str(pdf.resolve()))
 
+    def test_replaces_pdf_first_page_and_preserves_following_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original = root / "original.pdf"
+            replacement = root / "replacement.pdf"
+            output = root / "output.pdf"
+            make_test_pdf(original, [500, 600, 700])
+            make_test_pdf(replacement, [900])
+
+            replace_pdf_first_page(original, replacement, output)
+
+            self.assertEqual(pdf_widths(output), [900, 600, 700])
+            self.assertEqual(pdf_widths(original), [500, 600, 700])
+
+            make_test_pdf(replacement, [900, 901])
+            with self.assertRaisesRegex(ValueError, "必须恰好为一页"):
+                replace_pdf_first_page(original, replacement, output)
+            self.assertFalse(output.exists())
+
     def test_updates_existing_subject_and_content_and_reissues_pdf(self) -> None:
         from datetime import date
 
@@ -1217,7 +1255,7 @@ class WorkflowTests(unittest.TestCase):
                 subject="测试事项",
                 requirement_content="原需求内容",
             )
-            pdf.write_bytes(b"%PDF-" + b"old" * 40)
+            make_test_pdf(pdf, [500, 600])
             data = {
                 "schema_version": 1,
                 "dataset_revision": 5,
@@ -1253,7 +1291,7 @@ class WorkflowTests(unittest.TestCase):
             )
 
             def export_pdf(_: Path, output: Path) -> Path:
-                output.write_bytes(b"%PDF-" + b"new" * 40)
+                make_test_pdf(output, [900])
                 return output
 
             with patch(
@@ -1276,7 +1314,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(parse_docx(word).requirement_content, "原需求内容")
             self.assertEqual(parse_docx(word).subject, "测试事项")
             self.assertTrue(folder.is_dir())
-            self.assertEqual(pdf.read_bytes(), b"%PDF-" + b"old" * 40)
+            self.assertEqual(pdf_widths(pdf), [500, 600])
 
             with patch(
                 "multidocu_collator.flows.update_record_content_flow.export_pdf_with_word",
@@ -1295,7 +1333,7 @@ class WorkflowTests(unittest.TestCase):
                 )
             self.assertTrue(result["changed"])
             self.assertEqual(parse_docx(word).requirement_content, "修订后的需求内容")
-            self.assertEqual(pdf.read_bytes(), b"%PDF-" + b"new" * 40)
+            self.assertEqual(pdf_widths(pdf), [900, 600])
             rebuild.assert_called_once_with(context)
 
             revised_subject = "关于修改后测试事项的事宜"
@@ -1327,7 +1365,7 @@ class WorkflowTests(unittest.TestCase):
                 parse_docx(revised_word).requirement_content,
                 "主题和正文均已修改",
             )
-            self.assertEqual(revised_pdf.read_bytes(), b"%PDF-" + b"new" * 40)
+            self.assertEqual(pdf_widths(revised_pdf), [900, 600])
 
     def test_create_record_commits_only_complete_docx_and_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -50,8 +50,11 @@ python -m venv .venv
 python -m pip --version
 ```
 
-项目当前没有第三方运行依赖，因此创建环境后无需安装额外软件包。运行和测试时
-优先显式使用 `.venv` 内的解释器。
+安装 PDF 页面合并依赖，并在运行和测试时优先显式使用 `.venv` 内的解释器：
+
+```bash
+python -m pip install -r requirements.txt
+```
 
 复制 `common.env.example` 为本机私有的 `.env`（也兼容旧的 `common.env`）。程序
 优先读取 `.env`，再用 `common.env` 补齐缺少的配置，并自动按运行系统选择群晖同步
@@ -211,8 +214,9 @@ python serve_summary.py
 服务端只接受记录 ID、页面数据版本、新主题和新正文，不允许通过该接口修改编号、
 日期或致送单位。保存时程序先在同目录临时区修改原 DOCX 并回读校验，再调用
 Microsoft Word 重新导出 PDF；修改主题时还会同步更新一级资料目录及联系单
-DOCX/PDF 文件名。Word、PDF、目录及 JSON/HTML 全部更新成功后才提交，失败时恢复
-旧文件和旧目录。
+DOCX/PDF 文件名。如果目录中已有同名 PDF，新生成的单页 PDF 会先保存在事务临时
+目录中，再替换原 PDF 的第一页，原 PDF 第二页起的附件页保持不变。Word、PDF、
+目录及 JSON/HTML 全部更新成功后才提交，失败时恢复旧文件和旧目录。
 
 ## Windows 11 本地 AI 公文勘误
 
@@ -338,7 +342,7 @@ python validate_archive.py --data-root "/path/to/02 酒店需求工作联系单"
 
 ## 测试
 
-项目只使用 Python 标准库，支持 Python 3.10 及以上版本：
+项目支持 Python 3.10 及以上版本；运行测试前先安装 `requirements.txt`：
 
 ```bash
 python -m unittest discover -s tests -v
@@ -354,7 +358,7 @@ python -m compileall -q build_archive.py serve_summary.py validate_archive.py lo
 - 路径统一由 `pathlib.Path` 处理，JSON 内文件路径统一保存为 POSIX 风格相对路径。
 - `.venv/`、`.conda/` 和 `.vscode/` 均为每台机器本地环境，不通过 Git 或群晖
   复用。
-- 项目没有第三方 Python 运行依赖；不同系统只需安装 Python 3.10 或更高版本。
+- Python 依赖统一通过 `requirements.txt` 安装，不在不同系统之间复用虚拟环境。
 - 自动生成 PDF 支持装有 Microsoft Word 的 Windows 和 macOS；Linux 可继续扫描、
   查询和校验，但不能从末行新增并导出 PDF。
 
@@ -381,6 +385,7 @@ repair_archive_permissions.ps1   扫描并修复无法读取文件的 Windows AC
 validate_archive.py              独立校验入口
 serve_summary.py                 本地汇总、目录打开及新增联系单入口
 logging_config.py                统一控制台及滚动文件日志
+requirements.txt                Python 运行依赖（PDF 页面合并）
 src/multidocu_collator/modules/  DOCX 解析/生成、Word PDF、扫描、HTML、校验
 src/multidocu_collator/flows/    扫描建库、新增联系单及服务编排
 tests/                           单元和集成测试

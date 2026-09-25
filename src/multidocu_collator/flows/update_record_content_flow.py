@@ -14,7 +14,7 @@ from ..constants import TRASH_DIRECTORY_NAME
 from ..context import AppContext
 from ..modules.desktop import resolve_relative_file
 from ..modules.document_generator import update_contact_content
-from ..modules.pdf_exporter import export_pdf_with_word
+from ..modules.pdf_exporter import export_pdf_with_word, replace_pdf_first_page
 from ..modules.repository import load_dataset
 from .build_archive_flow import run_build_archive
 from .create_record_flow import _clean_component
@@ -136,6 +136,7 @@ def update_record_content(
             staged_pdf = staging / issued_pdf.name
             word_backup = staging / f"backup-{source_word.name}"
             pdf_backup = staging / f"backup-{issued_pdf.name}"
+            merged_pdf = staging / f"merged-{issued_pdf.name}"
             update_contact_content(
                 source_word,
                 staged_word,
@@ -147,6 +148,8 @@ def update_record_content(
             pdf_existed = issued_pdf.is_file()
             if pdf_existed:
                 shutil.copy2(issued_pdf, pdf_backup)
+                replace_pdf_first_page(issued_pdf, staged_pdf, merged_pdf)
+                merged_pdf.replace(staged_pdf)
 
             directory_moved = False
             live_word = source_word

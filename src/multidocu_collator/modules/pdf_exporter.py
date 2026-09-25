@@ -7,6 +7,8 @@ import platform
 import subprocess
 from pathlib import Path
 
+from pypdf import PdfReader, PdfWriter
+
 
 MACOS_SCRIPT = r'''
 on run argv
@@ -53,6 +55,55 @@ def validate_pdf(path: Path) -> None:
         raise ValueError("Microsoft Word 未生成有效 PDF")
     if not path.read_bytes()[:5] == b"%PDF-":
         raise ValueError("生成文件不是有效 PDF")
+
+
+def replace_pdf_first_page(original: Path, replacement: Path, output: Path) -> Path:
+    """以新 PDF 的唯一页面替换原 PDF 首页，并保留原 PDF 的后续页面。"""
+    resolved_output = output.resolve()
+    if resolved_output in {original.resolve(), replacement.resolve()}:
+        raise ValueError("PDF 首页替换必须输出到独立的临时文件")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with original.open("rb") as original_stream, replacement.open(
+            "rb"
+        ) as replacement_stream:
+            original_reader = PdfReader(original_stream)
+            replacement_reader = PdfReader(replacement_stream)
+            if original_reader.is_encrypted:
+                raise ValueError("原 PDF 已加密，无法替换第一页")
+            if replacement_reader.is_encrypted:
+                raise ValueError("新生成的 PDF 已加密，无法用于替换第一页")
+            if not original_reader.pages:
+                raise ValueError("原 PDF 没有可替换的页面")
+            if len(replacement_reader.pages) != 1:
+                raise ValueError("新生成的联系单 PDF 必须恰好为一页")
+
+            original_page_count = len(original_reader.pages)
+            writer = PdfWriter()
+            writer.add_page(replacement_reader.pages[0])
+            for page in original_reader.pages[1:]:
+                writer.add_page(page)
+            metadata = original_reader.metadata or {}
+            if metadata:
+                writer.add_metadata(
+                    {
+                        str(key): str(value)
+                        for key, value in metadata.items()
+                        if value is not None
+                    }
+                )
+            with output.open("wb") as output_stream:
+                writer.write(output_stream)
+
+        validate_pdf(output)
+        with output.open("rb") as output_stream:
+            page_count = len(PdfReader(output_stream).pages)
+        if page_count != original_page_count:
+            raise ValueError("替换首页后的 PDF 页数不正确")
+        return output
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
 
 
 def export_pdf_with_word(
