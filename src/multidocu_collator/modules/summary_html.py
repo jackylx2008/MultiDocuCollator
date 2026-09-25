@@ -167,12 +167,12 @@ HTML_TEMPLATE = r'''<!doctype html>
     .visible-count { margin-left:auto; color:var(--muted); font-size:14px; }
     .table-wrap { max-height:calc(100vh - 270px); overflow:auto; border:1px solid var(--line); border-top:0; background:white; }
     table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; font-size:13px; }
-    th { position:sticky; top:0; z-index:2; padding:6px 5px; color:white; background:var(--navy); text-align:left; }
+    th { position:sticky; top:0; z-index:10; padding:6px 5px; color:white; background:var(--navy); text-align:left; }
     .column-header { display:flex; flex-direction:column; gap:3px; }
     .column-filter { width:100%; min-height:26px; padding:2px 4px; color:#17212b; border-color:#91a8ba; border-radius:5px; font-size:12px; font-weight:400; }
     td { padding:6px 5px; border-right:1px solid #edf1f4; border-bottom:1px solid #e5eaee; vertical-align:top; overflow-wrap:anywhere; white-space:pre-line; }
     tbody tr:hover { background:#f7fbff; }
-    tbody tr.void-row td { position:relative; }
+    tbody tr.void-row td { position:relative; isolation:isolate; }
     tbody tr.void-row td::after { content:""; position:absolute; z-index:4; inset:0; pointer-events:none; background:repeating-linear-gradient(135deg,transparent 0 10px,rgba(108,116,124,.28) 10px 14px); }
     .subject-link { color:#174d7a; font-weight:600; text-decoration:none; }
     .subject-link:hover { color:#0c6db2; text-decoration:underline; }

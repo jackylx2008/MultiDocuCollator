@@ -388,6 +388,8 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("void-row", html)
             self.assertIn("repeating-linear-gradient", html)
             self.assertIn("rgba(108,116,124,.28) 10px 14px", html)
+            self.assertIn("top:0; z-index:10", html)
+            self.assertIn("position:relative; isolation:isolate", html)
             save_script = html.split("async function saveManualStatuses", 1)[1].split(
                 "async function deleteRecord", 1
             )[0]
