@@ -302,7 +302,8 @@ HTML_TEMPLATE = r'''<!doctype html>
           <th><div class="column-header"><span>专业</span><select id="disciplineFilter" class="column-filter" aria-label="按专业筛选"><option value="">全部专业</option></select></div></th>
           <th>编号</th><th>目录日期</th><th>致送单位</th><th>主题</th><th>需求内容</th><th>资料文件</th>
           <th><div class="column-header"><span>需求单已经打印</span><select id="printFilter" class="column-filter" aria-label="按需求单打印标记筛选"><option value="">全部</option><option value="是">是</option><option value="否">否</option></select></div></th>
-          <th>是否需要变更</th><th>现场是否已经完成</th>
+          <th><div class="column-header"><span>是否需要变更</span><select id="changeRequiredFilter" class="column-filter" aria-label="按是否需要变更筛选"><option value="">全部</option><option value="是">是</option><option value="否">否</option></select></div></th>
+          <th><div class="column-header"><span>现场是否已经完成</span><select id="siteCompletedFilter" class="column-filter" aria-label="按现场是否已经完成筛选"><option value="">全部</option><option value="是">是</option><option value="否">否</option></select></div></th>
           <th><div class="column-header"><span>状态 / 核对</span><select id="statusFilter" class="column-filter" aria-label="按状态筛选"><option value="">全部状态</option><option value="complete">资料齐全</option><option value="needs_review">待核对</option><option value="incomplete">资料不完整</option><option value="void">作废</option></select></div></th>
         </tr></thead>
         <tbody id="body"></tbody>
@@ -479,11 +480,11 @@ HTML_TEMPLATE = r'''<!doctype html>
       }catch(error){alert(`删除失败：${errorMessage(error)}`);button.disabled=false;button.textContent='删除'}
     }
     function render(){
-      const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, printStatus=$('printFilter').value, status=$('statusFilter').value;
+      const query=$('search').value.trim().toLowerCase(), discipline=$('disciplineFilter').value, printStatus=$('printFilter').value, changeRequired=$('changeRequiredFilter').value, siteCompleted=$('siteCompletedFilter').value, status=$('statusFilter').value;
       const rows=data.rows.filter(row=>{
         const haystack=[row.discipline,row.sequence_no,row.folder_date,row.subject,row.requirement_content,row.word_date,row.word_subject,row.recipient,row.print_status,row.void_status==='是'?'作废':'有效',...row.warnings].join(' ').toLowerCase();
         const matchesStatus=!status||(status==='void'?row.void_status==='是':row.void_status!=='是'&&row.status===status);
-        return (!query||haystack.includes(query))&&(!discipline||row.discipline===discipline)&&(!printStatus||row.print_status===printStatus)&&matchesStatus;
+        return (!query||haystack.includes(query))&&(!discipline||row.discipline===discipline)&&(!printStatus||row.print_status===printStatus)&&(!changeRequired||row.change_required===changeRequired)&&(!siteCompleted||row.site_completed===siteCompleted)&&matchesStatus;
       });
       const body=$('body');body.replaceChildren();
       rows.forEach((row,index)=>{
@@ -575,7 +576,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     }
     function scheduleInitialScroll(){[0,120,400].forEach(delay=>setTimeout(()=>requestAnimationFrame(scrollToNewEntry),delay))}
     if('scrollRestoration' in history)history.scrollRestoration='manual';
-    ['search','disciplineFilter','printFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();scheduleInitialScroll();window.addEventListener('load',scheduleInitialScroll,{once:true});window.addEventListener('pageshow',scheduleInitialScroll,{once:true});checkLocalAi();
+    ['search','disciplineFilter','printFilter','changeRequiredFilter','siteCompletedFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();scheduleInitialScroll();window.addEventListener('load',scheduleInitialScroll,{once:true});window.addEventListener('pageshow',scheduleInitialScroll,{once:true});checkLocalAi();
   </script>
 </body>
 </html>
