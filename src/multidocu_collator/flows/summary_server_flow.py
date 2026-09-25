@@ -221,10 +221,7 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
 def run_summary_server(
     context: AppContext, *, open_browser: bool = True
 ) -> str:
-    if not context.html_path.is_file():
-        raise FileNotFoundError(f"请先生成 HTML 汇总: {context.html_path}")
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_class(context))
-    url = f"http://127.0.0.1:{server.server_port}/"
+    server, url = create_summary_server(context)
     logger.info("本地汇总服务: %s", url)
     logger.info("按 Ctrl+C 停止服务")
     if open_browser:
@@ -236,3 +233,14 @@ def run_summary_server(
     finally:
         server.server_close()
     return url
+
+
+def create_summary_server(
+    context: AppContext,
+) -> tuple[ThreadingHTTPServer, str]:
+    """创建尚未启动的本地 HTTP 服务，供控制窗口或命令行托管。"""
+    if not context.html_path.is_file():
+        raise FileNotFoundError(f"请先生成 HTML 汇总: {context.html_path}")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_class(context))
+    url = f"http://127.0.0.1:{server.server_port}/"
+    return server, url

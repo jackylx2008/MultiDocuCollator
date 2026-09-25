@@ -21,15 +21,19 @@
   python serve_summary.py
 
 输出：
-  控制台显示本地访问地址；按 Ctrl+C 停止服务。仅在用户点击末行“保存”时创建
-  新资料目录并更新 JSON/HTML；点击记录删除按钮时，只把既有资料目录移动到同级
-  _trash 并刷新成果，不执行永久删除。
+  源码模式在控制台显示本地访问地址，按 Ctrl+C 停止服务；Windows EXE 显示服务
+  控制窗口，可打开汇总页面或停止服务。仅在用户点击末行“保存”时创建新资料目录并
+  更新 JSON/HTML；点击记录删除按钮时，只把既有资料目录移动到同级 _trash 并刷新
+  成果，不执行永久删除。
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
+import logging
 import sys
+import threading
 from pathlib import Path
 
 
@@ -49,7 +53,94 @@ from logging_config import configure_utf8_stdio, setup_logger
 from multidocu_collator.config_loader import load_settings
 from multidocu_collator.context import AppContext
 from multidocu_collator.flows.build_archive_flow import run_build_archive
-from multidocu_collator.flows.summary_server_flow import run_summary_server
+from multidocu_collator.flows.summary_server_flow import (
+    _open_summary_browser,
+    create_summary_server,
+    run_summary_server,
+)
+
+
+def _bundled_icon_path() -> Path:
+    bundle_root = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
+    return bundle_root / "serve_summary.ico"
+
+
+def _run_control_window(context: AppContext, *, open_browser: bool) -> None:
+    from tkinter import Button, Frame, Label, StringVar, Tk
+
+    server, url = create_summary_server(context)
+    try:
+        root = Tk()
+    except Exception:
+        server.server_close()
+        raise
+    root.title("酒店需求工作联系单汇总")
+    root.resizable(False, False)
+    root.geometry("430x190")
+    icon_path = _bundled_icon_path()
+    if icon_path.is_file():
+        try:
+            root.iconbitmap(default=str(icon_path))
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "无法加载控制窗口图标：%s", icon_path, exc_info=True
+            )
+
+    status = StringVar(value="本地汇总服务正在运行")
+    Label(root, textvariable=status, font=("Microsoft YaHei UI", 14, "bold")).pack(
+        pady=(24, 8)
+    )
+    Label(root, text=url, font=("Segoe UI", 10), fg="#245b8f").pack(pady=(0, 18))
+    actions = Frame(root)
+    actions.pack()
+
+    stopping = False
+
+    def open_page() -> None:
+        _open_summary_browser(url)
+
+    def stop_service() -> None:
+        nonlocal stopping
+        if stopping:
+            return
+        stopping = True
+        status.set("正在停止本地汇总服务……")
+        open_button.configure(state="disabled")
+        stop_button.configure(state="disabled")
+
+        def shutdown() -> None:
+            server.shutdown()
+            server.server_close()
+
+        shutdown_thread = threading.Thread(target=shutdown, daemon=True)
+        shutdown_thread.start()
+
+        def wait_for_shutdown() -> None:
+            if shutdown_thread.is_alive():
+                root.after(50, wait_for_shutdown)
+            else:
+                root.destroy()
+
+        root.after(50, wait_for_shutdown)
+
+    open_button = Button(actions, text="打开汇总页面", width=15, command=open_page)
+    open_button.pack(side="left", padx=6)
+    stop_button = Button(actions, text="停止服务", width=15, command=stop_service)
+    stop_button.pack(side="left", padx=6)
+    root.protocol("WM_DELETE_WINDOW", stop_service)
+
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    if open_browser:
+        root.after(250, open_page)
+    root.mainloop()
+
+
+def _show_startup_error(message: str) -> None:
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        ctypes.windll.user32.MessageBoxW(0, message, "酒店需求汇总启动失败", 0x10)
+    else:
+        print(message, file=sys.stderr)
 
 
 def main() -> int:
@@ -77,9 +168,13 @@ def main() -> int:
     try:
         # 服务启动时先从实际资料目录重建 JSON/HTML，避免打开过期页面。
         run_build_archive(context)
-        run_summary_server(context, open_browser=not args.no_browser)
+        if getattr(sys, "frozen", False):
+            _run_control_window(context, open_browser=not args.no_browser)
+        else:
+            run_summary_server(context, open_browser=not args.no_browser)
     except Exception as exc:
-        print(f"本地汇总服务启动失败：{exc}", file=sys.stderr)
+        logging.getLogger(__name__).exception("本地汇总服务启动失败")
+        _show_startup_error(f"本地汇总服务启动失败：{exc}")
         return 1
     return 0
 

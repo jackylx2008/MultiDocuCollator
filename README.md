@@ -108,8 +108,10 @@ python -m venv .build-venv
 .\build_serve_summary_exe.ps1
 ```
 
-程序图标源文件和 Windows ICO 位于 `assets/`。打包使用控制台模式，运行期间请保留
-控制台窗口；关闭服务时在窗口中按 `Ctrl+C`。
+程序图标源文件和 Windows ICO 位于 `assets/`。EXE 使用无控制台模式，启动后显示
+一个小型服务控制窗口，并自动打开汇总页面；可通过控制窗口再次打开页面或停止服务，
+关闭控制窗口也会正常释放本地端口并退出进程。直接运行 Python 源码时仍在终端中使用
+`Ctrl+C` 停止服务。
 
 ## 迁移存档
 

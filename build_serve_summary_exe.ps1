@@ -23,11 +23,12 @@ $iconPath = Join-Path $projectRoot "assets\serve_summary.ico"
 $sourcePath = Join-Path $projectRoot "src"
 & $python -m PyInstaller `
     --onefile `
-    --console `
+    --windowed `
     --clean `
     --noconfirm `
     --name $appName `
     --icon $iconPath `
+    --add-data "$iconPath;." `
     --paths $sourcePath `
     --distpath $projectRoot `
     --workpath "build\serve_summary" `

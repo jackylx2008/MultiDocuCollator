@@ -10,7 +10,6 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 from xml.etree import ElementTree as ET
@@ -48,8 +47,8 @@ from multidocu_collator.flows.create_record_flow import (
 )
 from multidocu_collator.flows.delete_record_flow import delete_record
 from multidocu_collator.flows.summary_server_flow import (
-    _handler_class,
     _open_summary_browser,
+    create_summary_server,
 )
 from multidocu_collator.flows.new_content_draft_flow import (
     clear_new_content_draft,
@@ -781,14 +780,12 @@ class WorkflowTests(unittest.TestCase):
                 html_name="summary.html",
             )
             try:
-                server = ThreadingHTTPServer(
-                    ("127.0.0.1", 0), _handler_class(context)
-                )
+                server, url = create_summary_server(context)
             except PermissionError:
                 self.skipTest("当前沙箱不允许绑定本机回环端口")
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
-            base = f"http://127.0.0.1:{server.server_port}"
+            base = url.rstrip("/")
             try:
                 with urllib.request.urlopen(base + "/", timeout=3) as response:
                     self.assertIn(b"summary", response.read())
