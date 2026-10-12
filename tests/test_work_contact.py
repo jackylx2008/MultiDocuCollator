@@ -39,7 +39,7 @@ from multidocu_collator.modules.summary_html import export_summary_html
 from multidocu_collator.modules.docx_parser import parse_docx
 from multidocu_collator.modules.work_contact import WRITING_SKILL_NAME, scan_work_contacts
 from multidocu_collator.modules.work_contact_attachment import read_attachment_docx
-from multidocu_collator.modules.work_contact_ai import generate_work_contact_draft
+from multidocu_collator.modules.work_contact_ai import generate_work_contact_draft, split_work_contact_content
 from multidocu_collator.modules.work_contact_document import write_work_contact_docx
 
 
@@ -66,6 +66,55 @@ STRUCTURAL_TEMPLATE_XML = '''<w:document xmlns:w="http://schemas.openxmlformats.
 
 
 class WorkContactTests(unittest.TestCase):
+    def test_ai_split_previews_body_and_preserves_existing_attachment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / WRITING_SKILL_NAME).write_text("正文概述，附件逐项列明问题。", encoding="utf-8")
+            context = AppContext(root, root, "hotel.json", "hotel.html", work_contact_root=root,
+                                 local_ai_model="test-model")
+            original = "B1层排水泵故障，无法启动。请检查电源并修复。"
+            response = {"choices": [{"message": {"content": json.dumps({
+                "content": "排水系统存在故障，请修复并反馈；具体问题详见附件。",
+                "attachment_content": "1. B1层排水泵无法启动，请检查电源并修复。",
+            }, ensure_ascii=False)}}]}
+            before = sorted(path.name for path in root.iterdir())
+            with (
+                patch("multidocu_collator.modules.work_contact_ai._healthcheck", return_value=["test-model"]),
+                patch("multidocu_collator.modules.work_contact_ai._request_json", return_value=response) as request,
+            ):
+                result = split_work_contact_content(root, {
+                    "content": original, "attachment_content": "原附件第一项。", "subject": "排水系统整改",
+                }, context=context, system_name="Windows")
+            self.assertEqual(result["content"], "排水系统存在故障，请修复并反馈；具体问题详见附件。")
+            self.assertEqual(result["attachment_content"],
+                             "原附件第一项。\n\n1. B1层排水泵无法启动，请检查电源并修复。")
+            self.assertIn("正文概述，附件逐项列明问题。",
+                          request.call_args.kwargs["payload"]["messages"][0]["content"])
+            self.assertEqual(sorted(path.name for path in root.iterdir()), before)
+
+    def test_ai_split_retries_when_model_omits_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / WRITING_SKILL_NAME).write_text("附件逐项列明。", encoding="utf-8")
+            context = AppContext(root, root, "hotel.json", "hotel.html", work_contact_root=root,
+                                 local_ai_model="test-model")
+            def response(content: str, attachment: str) -> dict:
+                return {"choices": [{"message": {"content": json.dumps({
+                    "content": content, "attachment_content": attachment,
+                }, ensure_ascii=False)}}]}
+            with (
+                patch("multidocu_collator.modules.work_contact_ai._healthcheck", return_value=["test-model"]),
+                patch("multidocu_collator.modules.work_contact_ai._request_json", side_effect=[
+                    response("请整改。", ""),
+                    response("请整改，具体问题详见附件。", "1. 排水泵无法启动，请修复。"),
+                ]) as request,
+            ):
+                result = split_work_contact_content(root, {
+                    "content": "排水泵无法启动，请修复。", "subject": "排水泵整改",
+                }, context=context, system_name="Windows")
+            self.assertEqual(request.call_count, 2)
+            self.assertEqual(result["attachment_content"], "1. 排水泵无法启动，请修复。")
+
     def test_attachment_word_and_pdf_follow_record_edits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -748,6 +797,7 @@ class WorkContactTests(unittest.TestCase):
                 html = urllib.request.urlopen(url + "work-contact/").read().decode("utf-8")
                 self.assertIn("主体工作联系单汇总", html)
                 self.assertIn("/api/copy-work-contact-file", html)
+                self.assertIn("AI 拆分正文与附件", html)
                 self.assertEqual(urllib.request.urlopen(url + "work-contact/sample.pdf").read(), b"%PDF-1.4\n")
                 copy_request = urllib.request.Request(
                     url + "api/copy-work-contact-file",
@@ -790,6 +840,19 @@ class WorkContactTests(unittest.TestCase):
                 ) as generator:
                     self.assertEqual(json.load(urllib.request.urlopen(draft_request))["subject"], "设备维修")
                 generator.assert_called_once_with(work, draft_payload, context=context)
+                split_payload = {"content": "设备故障，请维修。", "subject": "设备维修"}
+                split_request = urllib.request.Request(
+                    url + "api/split-work-contact",
+                    data=json.dumps(split_payload, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.split_work_contact_content",
+                    return_value={"content": "请维修，详见附件。", "attachment_content": "1. 设备故障。"},
+                ) as splitter:
+                    self.assertEqual(json.load(urllib.request.urlopen(split_request))["attachment_content"],
+                                     "1. 设备故障。")
+                splitter.assert_called_once_with(work, split_payload, context=context)
                 with self.assertRaises(urllib.error.HTTPError):
                     urllib.request.urlopen(url + "work-contact/%2e%2e/hotel/hotel.html")
             finally:

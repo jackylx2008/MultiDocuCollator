@@ -57,6 +57,20 @@ def _draft_issues(facts: str, subject: str, content: str, attachment_content: st
     return issues
 
 
+def _writing_skill(root: Path) -> tuple[bytes, str]:
+    root = root.resolve(strict=True)
+    skill_path = (root / WRITING_SKILL_NAME).resolve(strict=True)
+    if skill_path.parent != root or not skill_path.is_file():
+        raise ValueError("工作联系单写作规则必须位于资料根目录")
+    skill_bytes = skill_path.read_bytes()
+    if not skill_bytes or len(skill_bytes) > 65536:
+        raise ValueError("工作联系单写作规则为空或超过 64 KB")
+    try:
+        return skill_bytes, skill_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("工作联系单写作规则必须是 UTF-8 Markdown") from exc
+
+
 def generate_work_contact_draft(
     root: Path,
     payload: dict[str, Any],
@@ -67,17 +81,7 @@ def generate_work_contact_draft(
     """仅返回待审核草稿，不修改资料、JSON 或 Word/PDF。"""
     if (system_name or platform.system()) != "Windows":
         raise RuntimeError("本地 AI 起草当前仅支持 Windows")
-    root = root.resolve(strict=True)
-    skill_path = (root / WRITING_SKILL_NAME).resolve(strict=True)
-    if skill_path.parent != root or not skill_path.is_file():
-        raise ValueError("工作联系单写作规则必须位于资料根目录")
-    skill_bytes = skill_path.read_bytes()
-    if not skill_bytes or len(skill_bytes) > 65536:
-        raise ValueError("工作联系单写作规则为空或超过 64 KB")
-    try:
-        skill_text = skill_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise ValueError("工作联系单写作规则必须是 UTF-8 Markdown") from exc
+    skill_bytes, skill_text = _writing_skill(root)
 
     facts = str(payload.get("facts") or "").strip()
     if not facts:
@@ -195,6 +199,106 @@ def generate_work_contact_draft(
         "content": content,
         "attachment_content": attachment_content,
         "missing_information": missing,
+        "model": context.local_ai_model,
+        "skill_file": WRITING_SKILL_NAME,
+        "skill_sha256": hashlib.sha256(skill_bytes).hexdigest(),
+    }
+
+
+def split_work_contact_content(
+    root: Path,
+    payload: dict[str, Any],
+    *,
+    context: AppContext,
+    system_name: str | None = None,
+) -> dict[str, Any]:
+    """把已有长正文拆成待审核的简要正文和问题附件，不写入资料。"""
+    if (system_name or platform.system()) != "Windows":
+        raise RuntimeError("本地 AI 拆分当前仅支持 Windows")
+    skill_bytes, skill_text = _writing_skill(root)
+    original = str(payload.get("content") or "").strip()
+    existing_attachment = str(payload.get("attachment_content") or "").strip()
+    subject = str(payload.get("subject") or "").strip()
+    if not original:
+        raise ValueError("请先填写需要拆分的正文")
+    if len(original) > 10000 or len(existing_attachment) > 20000:
+        raise ValueError("正文或现有附件超过字段长度限制")
+    if len(subject) > 120:
+        raise ValueError("主题不能超过 120 个字符")
+    models = _healthcheck(context)
+    request_model = _matching_model(context.local_ai_model, models)
+    if request_model is None:
+        raise RuntimeError("配置模型与本地 AI 已加载模型不一致")
+    _, _, chat_url = _urls(context.local_ai_base_url)
+    request_payload = {
+        "model": request_model,
+        "temperature": 0.1,
+        "max_tokens": 8192,
+        "stream": False,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是甲方工程管理《工作联系单》编辑。请依照下方写作规则，将用户提供的现有正文"
+                    "拆成简短的联系单正文 content 和逐项说明具体问题的附件新增内容 attachment_content。"
+                    "仅根据原文改写，不新增事实、现场检查、日期、期限、合同或费用责任。"
+                    "正文概述问题与影响，提出统一整改及反馈要求，有附件时写“具体问题详见附件”；"
+                    "正文不超过 900 字，不含抬头、事由、落款和“以下空白”。"
+                    "附件按位置或设备、现象、影响、整改动作逐项组织；保留原文的数字、设备编号与具体问题。"
+                    "现有附件由程序原样保留，你只需输出从现有正文拆出的新增附件内容，不重复现有附件。"
+                    "只输出 JSON 对象，键为 content 和 attachment_content，不要解释或 Markdown。\n\n"
+                    "本项目写作规则：\n" + skill_text
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"事由": subject, "现有正文": original,
+                     "现有附件开头（仅用于避免重复）": existing_attachment[:2500]},
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+    }
+    for attempt in range(2):
+        response = _request_json(
+            chat_url, payload=request_payload,
+            timeout=context.local_ai_request_timeout_sec,
+            api_key=context.local_ai_api_key,
+        )
+        draft = _model_object(response)
+        content = re.sub(
+            r"^内\s*容\s*[：:]\s*", "", str(draft.get("content") or "").strip()
+        )
+        content = "\n".join(
+            line for line in content.replace("\r\n", "\n").splitlines()
+            if line.strip() != "以下空白"
+        ).strip()
+        added_attachment = re.sub(
+            r"^附\s*件\s*[：:]\s*", "",
+            str(draft.get("attachment_content") or "").strip(),
+        )
+        if not content or not added_attachment:
+            issues = ["必须分别提供简要正文和从原文拆出的具体问题附件"]
+        else:
+            issues = _draft_issues(original + "\n" + subject, "", content, added_attachment)
+        combined_attachment = "\n\n".join(
+            part for part in (existing_attachment, added_attachment) if part
+        )
+        if len(combined_attachment) > 20000:
+            issues.append("拆分后附件超过 20000 个字符")
+        if not issues:
+            break
+        if attempt:
+            raise RuntimeError("本地 AI 连续未能可靠拆分正文：" + "；".join(issues))
+        request_payload["messages"].extend([
+            {"role": "assistant", "content": json.dumps(draft, ensure_ascii=False)},
+            {"role": "user", "content": "上稿存在问题：" + "；".join(issues)
+             + "。请仅依据原文重写 JSON，并保留全部具体问题。"},
+        ])
+    return {
+        "content": content,
+        "attachment_content": combined_attachment,
         "model": context.local_ai_model,
         "skill_file": WRITING_SKILL_NAME,
         "skill_sha256": hashlib.sha256(skill_bytes).hexdigest(),
