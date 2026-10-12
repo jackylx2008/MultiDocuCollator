@@ -15,6 +15,7 @@ from pypdf import PdfReader
 
 from ..modules.desktop import resolve_relative_directory, resolve_relative_file
 from ..modules.pdf_exporter import export_pdf_with_word, replace_pdf_first_page
+from ..modules.work_contact_attachment import write_attachment_docx
 from ..modules.work_contact_document import write_work_contact_docx
 from ..modules.work_contact import TEMPLATE_NAME, TEMPLATE_NAMES
 from .create_record_flow import _clean_component
@@ -33,19 +34,19 @@ def _load_current(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _clean_content(value: Any) -> str:
+def _clean_content(value: Any, *, label: str = "内容", required: bool = True, limit: int = 10000) -> str:
     content = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     content = re.sub(r"[ \t]+", " ", content)
     content = re.sub(r" *\n *", "\n", content)
     content = re.sub(r"\n{3,}", "\n\n", content)
-    if not content:
-        raise ValueError("内容不能为空")
-    if len(content) > 10000:
-        raise ValueError("内容不能超过 10000 个字符")
+    if required and not content:
+        raise ValueError(f"{label}不能为空")
+    if len(content) > limit:
+        raise ValueError(f"{label}不能超过 {limit} 个字符")
     return content
 
 
-def _values(payload: dict[str, Any]) -> dict[str, Any]:
+def _values(payload: dict[str, Any], *, current_attachment: str = "") -> dict[str, Any]:
     try:
         document_date = date.fromisoformat(str(payload.get("folder_date") or ""))
     except ValueError as exc:
@@ -55,6 +56,10 @@ def _values(payload: dict[str, Any]) -> dict[str, Any]:
         "recipient": _clean_component(payload.get("recipient"), "致送单位", max_length=100),
         "subject": _clean_component(payload.get("subject"), "主题", max_length=120),
         "content": _clean_content(payload.get("content")),
+        "attachment_content": _clean_content(
+            payload.get("attachment_content", current_attachment),
+            label="附件内容", required=False, limit=20000,
+        ),
     }
 
 
@@ -64,6 +69,10 @@ def _folder_name(code: str, document_date: date, subject: str) -> str:
 
 def _base_name(code: str, subject: str) -> str:
     return f"工作联系单（{code}）_{subject}"
+
+
+def _attachment_name(code: str, subject: str) -> str:
+    return f"附件（{code}）_{subject}"
 
 
 def _next_code(records: list[dict[str, Any]], discipline: str) -> str:
@@ -139,6 +148,14 @@ def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
                 content=values["content"],
             )
             export_pdf_with_word(word, pdf)
+            if values["attachment_content"]:
+                attachment_base = _attachment_name(code, values["subject"])
+                attachment_word = staging / f"{attachment_base}.docx"
+                write_attachment_docx(
+                    attachment_word, subject=values["subject"],
+                    content=values["attachment_content"],
+                )
+                export_pdf_with_word(attachment_word, staging / f"{attachment_base}.pdf")
             staging.replace(final)
             try:
                 build_work_contact_archive(root)
@@ -201,7 +218,7 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     with RECORD_MUTATION_LOCK:
         root = root.resolve(strict=True)
         data, record = _record_for_update(root, payload)
-        values = _values(payload)
+        values = _values(payload, current_attachment=str(record.get("附件内容") or ""))
         code, temporary, document_no = _numbering(
             data.get("records") or [], str(record.get("discipline") or ""), payload,
             current=record,
@@ -221,6 +238,7 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
             or values["subject"] != record.get("subject")
             or values["recipient"] != record.get("致送单位")
             or values["content"] != record.get("内容")
+            or values["attachment_content"] != str(record.get("附件内容") or "")
             or code != record.get("document_code")
             or temporary != bool(record.get("temporary_number"))
             or document_no != str(record.get("original_document_no") or ("" if temporary else record.get("document_code") or ""))
@@ -285,6 +303,25 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
             (staging / source_word.name).unlink()
         if issued_item and source_pdf and source_pdf.name != new_pdf.name:
             (staging / source_pdf.name).unlink()
+        previous_attachment_files = [
+            item for item in record.get("files") or []
+            if item.get("role") in {"attachment_word", "attachment_pdf"}
+            and str(item.get("name") or "").startswith(
+                f"附件（{record['document_code']}）_"
+            )
+        ]
+        for item in previous_attachment_files:
+            old_attachment = staging / str(item["name"])
+            if old_attachment.is_file():
+                old_attachment.unlink()
+        if values["attachment_content"]:
+            attachment_base = _attachment_name(code, values["subject"])
+            attachment_word = staging / f"{attachment_base}.docx"
+            write_attachment_docx(
+                attachment_word, subject=values["subject"],
+                content=values["attachment_content"],
+            )
+            export_pdf_with_word(attachment_word, staging / f"{attachment_base}.pdf")
         source_dir.replace(snapshot)
         try:
             for name in (JSON_NAME, "主体工作联系单汇总.html"):

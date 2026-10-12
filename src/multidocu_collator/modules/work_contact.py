@@ -11,6 +11,7 @@ from zipfile import BadZipFile, ZipFile
 
 from .docx_parser import W, parse_docx
 from .file_utils import relative_posix, sha256_file
+from .work_contact_attachment import read_attachment_docx
 
 
 DOCUMENT_NAME = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})_工作联系单_(?P<subject>.+)\.docx$")
@@ -97,6 +98,7 @@ def _organized_record(directory: Path, root: Path, match: re.Match[str]) -> dict
     warnings: list[str] = []
     fields = None
     content = ""
+    attachment_content = ""
     if word is None:
         warnings.append("缺少 Word 联系单")
     else:
@@ -109,10 +111,20 @@ def _organized_record(directory: Path, root: Path, match: re.Match[str]) -> dict
         warnings.append("Word 日期与目录不一致")
     if not content:
         warnings.append("未提取到正文内容")
+    attachment_words = [
+        path for path in words if path != word and path.name.startswith(f"附件（{code}）_")
+    ]
+    if attachment_words:
+        try:
+            attachment_content = read_attachment_docx(attachment_words[0])
+        except (OSError, ValueError) as exc:
+            warnings.append(f"附件 Word 读取失败：{type(exc).__name__}")
     file_items = []
     for path in files:
         if path == word:
             role = "source_word"
+        elif path in attachment_words:
+            role = "attachment_word"
         elif path.suffix.lower() == ".docx":
             role = "auxiliary_word"
         elif path.suffix.lower() == ".pdf" and "扫描件" in path.stem:
@@ -142,6 +154,7 @@ def _organized_record(directory: Path, root: Path, match: re.Match[str]) -> dict
         "subject": subject,
         "致送单位": fields.recipient if fields else "",
         "内容": content,
+        "附件内容": attachment_content,
         "word_subject": fields.subject if fields else "",
         "files": file_items,
         "status": "needs_review" if any("不一致" in item or "读取失败" in item for item in warnings) else (
@@ -208,6 +221,7 @@ def scan_work_contacts(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
             "subject": match["subject"].strip(),
             "致送单位": fields.recipient if fields else "",
             "内容": content,
+            "附件内容": "",
             "word_subject": fields.subject if fields else "",
             "files": files,
             "status": "needs_review" if any("不一致" in item or "读取失败" in item for item in warnings) else (

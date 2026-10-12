@@ -38,6 +38,7 @@ from multidocu_collator.flows.work_contact_mutation import (
 from multidocu_collator.modules.summary_html import export_summary_html
 from multidocu_collator.modules.docx_parser import parse_docx
 from multidocu_collator.modules.work_contact import WRITING_SKILL_NAME, scan_work_contacts
+from multidocu_collator.modules.work_contact_attachment import read_attachment_docx
 from multidocu_collator.modules.work_contact_ai import generate_work_contact_draft
 from multidocu_collator.modules.work_contact_document import write_work_contact_docx
 
@@ -65,6 +66,61 @@ STRUCTURAL_TEMPLATE_XML = '''<w:document xmlns:w="http://schemas.openxmlformats.
 
 
 class WorkContactTests(unittest.TestCase):
+    def test_attachment_word_and_pdf_follow_record_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with ZipFile(root / TEMPLATE_NAME, "w") as archive:
+                archive.writestr("word/document.xml", STRUCTURAL_TEMPLATE_XML)
+            build_work_contact_archive(root)
+
+            def fake_pdf(_word: Path, pdf: Path) -> Path:
+                writer = PdfWriter()
+                writer.add_blank_page(width=595, height=842)
+                with pdf.open("wb") as stream:
+                    writer.write(stream)
+                return pdf
+
+            def dataset() -> dict:
+                return json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+
+            details = "1. B1层排水泵无法启动，请检查电源。\n\n2. 阀门渗漏，请修复。"
+            base = {"discipline": "质保", "folder_date": "2026-10-12", "recipient": "施工单位",
+                    "subject": "排水系统整改", "content": "排水系统存在故障，请逐项整改；具体问题详见附件。",
+                    "attachment_content": details}
+            with patch("multidocu_collator.flows.work_contact_mutation.export_pdf_with_word", side_effect=fake_pdf):
+                create_work_contact(root, {**base, "dataset_revision": dataset()["dataset_revision"],
+                                           "number_mode": "temporary"})
+                record = dataset()["records"][0]
+                self.assertEqual(record["附件内容"], details)
+                self.assertEqual({item["role"] for item in record["files"]},
+                                 {"source_word", "issued_pdf", "attachment_word", "attachment_pdf"})
+                attachment = root / next(item["path"] for item in record["files"] if item["role"] == "attachment_word")
+                self.assertEqual(read_attachment_docx(attachment), details)
+                unrelated_pdf = attachment.parent / "附加说明.pdf"
+                fake_pdf(attachment, unrelated_pdf)
+                build_work_contact_archive(root)
+                revised = details + "\n3. 控制柜报警，请核查。"
+                update_work_contact(root, {**base, "attachment_content": revised,
+                                           "dataset_revision": dataset()["dataset_revision"],
+                                           "record_id": record["record_id"], "number_mode": "keep"})
+                record = dataset()["records"][0]
+                self.assertEqual(record["附件内容"], revised)
+                self.assertTrue(unrelated_pdf.is_file())
+                inline_values = {key: value for key, value in base.items() if key != "attachment_content"}
+                update_work_contact(root, {**inline_values, "content": "请按附件逐项整改并反馈。",
+                                           "dataset_revision": dataset()["dataset_revision"],
+                                           "record_id": record["record_id"], "number_mode": "keep"})
+                record = dataset()["records"][0]
+                self.assertEqual(record["附件内容"], revised)
+                update_work_contact(root, {**base, "attachment_content": "",
+                                           "dataset_revision": dataset()["dataset_revision"],
+                                           "record_id": record["record_id"], "number_mode": "keep"})
+                record = dataset()["records"][0]
+                self.assertEqual(record["附件内容"], "")
+                self.assertEqual({item["role"] for item in record["files"]},
+                                 {"source_word", "issued_pdf", "attachment_pdf"})
+                self.assertTrue(unrelated_pdf.is_file())
+
     def test_new_contact_preserves_blank_lines_in_body(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -257,7 +313,8 @@ class WorkContactTests(unittest.TestCase):
                                  local_ai_model="test-model")
             response = {"choices": [{"message": {"content": json.dumps({
                 "recipient": "施工单位", "subject": "事由：关于设备维修事宜",
-                "content": "内容：设备故障。\n请落实维修。\n以下空白",
+                "content": "内容：设备故障。具体问题详见附件。\n请落实维修。\n以下空白",
+                "attachment_content": "附件：1. 排水泵无法启动，请检查电源。",
                 "missing_information": ["请核对整改时限"],
             }, ensure_ascii=False)}}]}
             payload = {"facts": "设备故障，请落实维修。", "discipline": "质保",
@@ -272,7 +329,8 @@ class WorkContactTests(unittest.TestCase):
                 second = generate_work_contact_draft(root, payload, context=context, system_name="Windows")
                 self.assertIn("更新规则：只写问题和要求。", request.call_args.kwargs["payload"]["messages"][0]["content"])
             self.assertEqual(first["subject"], "关于设备维修事宜")
-            self.assertEqual(first["content"], "设备故障。\n请落实维修。")
+            self.assertEqual(first["content"], "设备故障。具体问题详见附件。\n请落实维修。")
+            self.assertEqual(first["attachment_content"], "1. 排水泵无法启动，请检查电源。")
             self.assertEqual(first["missing_information"], ["请核对整改时限"])
             self.assertNotEqual(first["skill_sha256"], second["skill_sha256"])
             self.assertEqual([path.name for path in root.iterdir()], [WRITING_SKILL_NAME])

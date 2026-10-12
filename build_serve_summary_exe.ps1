@@ -13,7 +13,7 @@ $python = if (Test-Path -LiteralPath ".build-venv\Scripts\python.exe") {
     "python"
 }
 
-& $python -c "import PyInstaller, PIL, pypdf" 2>$null
+& $python -c "import PyInstaller, PIL, pypdf, docx" 2>$null
 if ($LASTEXITCODE -ne 0) {
     throw "缺少构建依赖，请先运行: $python -m pip install -r requirements-build.txt"
 }
