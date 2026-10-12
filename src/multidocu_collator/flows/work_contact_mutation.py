@@ -103,7 +103,7 @@ def _numbering(
     if any(record.get("document_code") == code for record in others):
         raise ValueError(f"编号已存在：{code}")
     temporary = mode == "temporary"
-    return code, temporary, "" if temporary else code
+    return code, temporary, f"{discipline}-" if temporary else code
 
 
 def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:

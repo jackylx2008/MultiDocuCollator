@@ -126,9 +126,9 @@ class WorkContactTests(unittest.TestCase):
                 self.assertEqual(temporary_record["document_code"], "质保-001")
                 record = dataset()["records"][0]
                 self.assertTrue(record["temporary_number"])
-                self.assertEqual(record["original_document_no"], "")
+                self.assertEqual(record["original_document_no"], "质保-")
                 word = root / next(item["path"] for item in record["files"] if item["role"] == "source_word")
-                self.assertEqual(parse_docx(word).document_no, "")
+                self.assertEqual(parse_docx(word).document_no, "质保-")
 
                 self.assertIn("质保-001", str(word))
 
@@ -139,7 +139,7 @@ class WorkContactTests(unittest.TestCase):
                 self.assertTrue(kept["changed"])
                 record = dataset()["records"][0]
                 self.assertTrue(record["temporary_number"])
-                self.assertEqual(record["original_document_no"], "")
+                self.assertEqual(record["original_document_no"], "质保-")
 
                 manual = update_work_contact(root, {
                     **base, "subject": "排水泵修复", "dataset_revision": dataset()["dataset_revision"],
@@ -175,9 +175,9 @@ class WorkContactTests(unittest.TestCase):
                 self.assertIn("质保-025", reverted["folder_path"])
                 record = next(item for item in dataset()["records"] if item["document_code"] == "质保-025")
                 self.assertTrue(record["temporary_number"])
-                self.assertEqual(record["original_document_no"], "")
+                self.assertEqual(record["original_document_no"], "质保-")
                 word = root / next(item["path"] for item in record["files"] if item["role"] == "source_word")
-                self.assertEqual(parse_docx(word).document_no, "")
+                self.assertEqual(parse_docx(word).document_no, "质保-")
 
     def test_edit_preserves_existing_unnumbered_word(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
