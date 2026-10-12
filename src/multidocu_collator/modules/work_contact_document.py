@@ -58,7 +58,8 @@ def _replace_body(document: ET.Element, content: str) -> None:
     start = labels[-1]
     end = next(
         (index for index in range(start + 1, len(paragraphs))
-         if BODY_END.match(_paragraph_text(paragraphs[index]).strip())),
+         if BODY_END.match(_paragraph_text(paragraphs[index]).strip())
+         and not _paragraph_text(paragraphs[index]).strip().startswith("以下空白")),
         None,
     )
     if end is None or end <= start + 1:
@@ -70,17 +71,48 @@ def _replace_body(document: ET.Element, content: str) -> None:
         raise ValueError("主体联系单正文跨越多个表格单元，无法安全更新")
     if any(paragraph.find(f".//{W}drawing") is not None for paragraph in candidates):
         raise ValueError("正文包含内嵌图形，请在 Word 中人工修改")
+    marker_template = next(
+        (paragraph for paragraph in candidates if _paragraph_text(paragraph).strip() == "以下空白"),
+        None,
+    )
     prototype = copy.deepcopy(next(
-        (paragraph for paragraph in candidates if _paragraph_text(paragraph).strip()),
+        (paragraph for paragraph in candidates
+         if _paragraph_text(paragraph).strip()
+         and _paragraph_text(paragraph).strip() != "以下空白"),
         candidates[0],
     ))
     insertion = list(parent).index(candidates[0])
     for paragraph in candidates:
         parent.remove(paragraph)
-    for offset, line in enumerate(content.splitlines() or [""]):
-        paragraph = copy.deepcopy(prototype)
+    for offset, line in enumerate([*(content.splitlines() or [""]), "", "以下空白"]):
+        paragraph = copy.deepcopy(marker_template if line == "以下空白" and marker_template is not None else prototype)
         _set_paragraph_text(paragraph, line)
+        if line == "以下空白":
+            properties = paragraph.find(f"{W}pPr")
+            if properties is None:
+                properties = ET.Element(f"{W}pPr")
+                paragraph.insert(0, properties)
+            alignment = properties.find(f"{W}jc")
+            if alignment is None:
+                alignment = ET.SubElement(properties, f"{W}jc")
+            alignment.set(f"{W}val", "left")
+            indentation = properties.find(f"{W}ind")
+            if indentation is not None:
+                properties.remove(indentation)
         parent.insert(insertion + offset, paragraph)
+    # 历史模板把整块联系单正文单元格设为垂直居中；短正文会落到页面中部。
+    cell = parent
+    while cell is not None and cell.tag != f"{W}tc":
+        cell = parent_map.get(cell)
+    if cell is not None:
+        properties = cell.find(f"{W}tcPr")
+        if properties is None:
+            properties = ET.Element(f"{W}tcPr")
+            cell.insert(0, properties)
+        alignment = properties.find(f"{W}vAlign")
+        if alignment is None:
+            alignment = ET.SubElement(properties, f"{W}vAlign")
+        alignment.set(f"{W}val", "top")
 
 
 def write_work_contact_docx(

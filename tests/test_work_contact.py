@@ -65,6 +65,41 @@ STRUCTURAL_TEMPLATE_XML = '''<w:document xmlns:w="http://schemas.openxmlformats.
 
 
 class WorkContactTests(unittest.TestCase):
+    def test_generated_contact_body_starts_at_top_of_template_cell(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "template.docx"
+            output = root / "generated.docx"
+            xml = STRUCTURAL_TEMPLATE_XML.replace(
+                "<w:body>",
+                '<w:body><w:tbl><w:tr><w:tc><w:tcPr><w:vAlign w:val="center"/></w:tcPr>',
+            ).replace("</w:body>", "</w:tc></w:tr></w:tbl></w:body>")
+            with ZipFile(source, "w") as archive:
+                archive.writestr("word/document.xml", xml)
+            write_work_contact_docx(
+                source, output, document_no="维保-005", document_date=date(2026, 10, 12),
+                recipient="施工单位", subject="防冻措施", content="请落实防冻措施。",
+            )
+            namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            with ZipFile(output) as archive:
+                document = ET.fromstring(archive.read("word/document.xml"))
+            alignment = document.find(".//w:tcPr/w:vAlign", namespace)
+            self.assertEqual(alignment.get("{%s}val" % namespace["w"]), "top")
+            self.assertEqual(parse_docx(output).document_no, "维保-005")
+            paragraphs = [
+                "".join(node.text or "" for node in paragraph.findall(".//w:t", namespace))
+                for paragraph in document.findall(".//w:p", namespace)
+            ]
+            footer = next(index for index, text in enumerate(paragraphs) if text.startswith("发出单位"))
+            self.assertEqual(paragraphs[footer - 3:footer], ["请落实防冻措施。", "", "以下空白"])
+            self.assertEqual(paragraphs.count("以下空白"), 1)
+            marker = next(paragraph for paragraph in document.findall(".//w:p", namespace)
+                          if "".join(node.text or "" for node in paragraph.findall(".//w:t", namespace)) == "以下空白")
+            self.assertIsNone(marker.find("./w:pPr/w:ind", namespace))
+            with ZipFile(source) as archive:
+                original = ET.fromstring(archive.read("word/document.xml"))
+            self.assertEqual(original.find(".//w:tcPr/w:vAlign", namespace).get("{%s}val" % namespace["w"]), "center")
+
     def test_number_modes_keep_temporary_number_out_of_word(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -257,6 +292,12 @@ class WorkContactTests(unittest.TestCase):
             with ZipFile(output) as archive:
                 document = ET.fromstring(archive.read("word/document.xml"))
             self.assertIsNotNone(document.find(".//{urn:structural-test}marker"))
+            paragraphs = [
+                "".join(node.text or "" for node in paragraph.iter(f"{{http://schemas.openxmlformats.org/wordprocessingml/2006/main}}t"))
+                for paragraph in document.iter(f"{{http://schemas.openxmlformats.org/wordprocessingml/2006/main}}p")
+            ]
+            footer = next(index for index, value in enumerate(paragraphs) if value.startswith("发出单位"))
+            self.assertEqual(paragraphs[footer - 4:footer], ["第一段。", "第二段。", "", "以下空白"])
             records_root = root / "archive"
             records_root.mkdir()
             archived = records_root / "2026-08-10_工作联系单_设备修复.docx"

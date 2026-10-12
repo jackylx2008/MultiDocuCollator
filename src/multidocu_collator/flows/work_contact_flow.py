@@ -143,7 +143,7 @@ HTML = r'''<!doctype html>
       categories.forEach(value=>{const option=document.createElement('option');option.value=value;suggestions.append(option)});
       categoryCell.append(category,suggestions);tr.append(categoryCell);
       const numberCell=cell(''),numberMode=document.createElement('select'),manualNumber=document.createElement('input'),numberHint=document.createElement('span');
-      [['auto','自动编号'],['temporary','临时编号'],['manual','手动输入']].forEach(([value,label])=>{const option=document.createElement('option');option.value=value;option.textContent=label;numberMode.append(option)});
+      [['auto','自动编号'],['temporary','临时编号（Word 留空）'],['manual','手动输入']].forEach(([value,label])=>{const option=document.createElement('option');option.value=value;option.textContent=label;numberMode.append(option)});
       manualNumber.className='number-input';manualNumber.maxLength=40;manualNumber.placeholder='如 023';manualNumber.hidden=true;numberHint.className='number-hint';
       const updateNumber=()=>{const mode=numberMode.value;manualNumber.hidden=mode!=='manual';manualNumber.required=mode==='manual';numberHint.textContent=mode==='manual'?'输入本类别未使用的数字序号':`${nextCode(category.value.trim())}${mode==='temporary'?'（仅 HTML 标注；Word 留空）':''}`};
       numberMode.addEventListener('change',updateNumber);numberCell.append(numberMode,manualNumber,numberHint);tr.append(numberCell);
