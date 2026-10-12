@@ -84,13 +84,6 @@ def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         discipline = _clean_component(payload.get("discipline"), "类别", max_length=30)
         if "-" in discipline:
             raise ValueError("类别不能包含连字符")
-        allowed = {
-            str(record["discipline"])
-            for record in data.get("records") or []
-            if record.get("discipline")
-        } or {"主体"}
-        if discipline not in allowed:
-            raise ValueError("类别必须与现有联系单一致")
         code = _next_code(data.get("records") or [], discipline)
         folder_name = _folder_name(code, values["folder_date"], values["subject"])
         final = root / folder_name

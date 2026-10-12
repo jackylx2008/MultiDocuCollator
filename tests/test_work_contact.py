@@ -137,6 +137,7 @@ class WorkContactTests(unittest.TestCase):
             records, unmatched = scan_work_contacts(root)
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0]["document_code"], "主体-001")
+            self.assertTrue(records[0]["temporary_number"])
             self.assertEqual(unmatched, ["未匹配.txt"])
 
     def test_organize_restores_flat_files_when_archive_build_fails(self) -> None:
@@ -208,6 +209,7 @@ class WorkContactTests(unittest.TestCase):
                 self.assertEqual(created["document_code"], "主体-001")
                 data = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
                 record = data["records"][0]
+                self.assertFalse(record["temporary_number"])
                 issued = root / next(item["path"] for item in record["files"] if item["role"] == "issued_pdf")
                 extra = PdfWriter()
                 with issued.open("rb") as stream:
@@ -239,6 +241,17 @@ class WorkContactTests(unittest.TestCase):
                 })
                 self.assertTrue((root / deleted["trash_path"]).is_dir())
                 self.assertEqual(len(json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))["records"]), 0)
+                refreshed = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+                custom = create_work_contact(root, {
+                    "dataset_revision": refreshed["dataset_revision"],
+                    "discipline": "给排水",
+                    "folder_date": "2026-08-11",
+                    "recipient": "施工单位",
+                    "subject": "管道维修",
+                    "content": "请处理。",
+                })
+                self.assertEqual(custom["document_code"], "给排水-001")
+                self.assertTrue((root / custom["folder_path"]).is_dir())
 
     def test_flat_documents_are_grouped_and_content_is_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
