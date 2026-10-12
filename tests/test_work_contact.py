@@ -561,8 +561,18 @@ class WorkContactTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                self.assertIn("主体工作联系单汇总", urllib.request.urlopen(url + "work-contact/").read().decode("utf-8"))
+                html = urllib.request.urlopen(url + "work-contact/").read().decode("utf-8")
+                self.assertIn("主体工作联系单汇总", html)
+                self.assertIn("/api/copy-work-contact-file", html)
                 self.assertEqual(urllib.request.urlopen(url + "work-contact/sample.pdf").read(), b"%PDF-1.4\n")
+                copy_request = urllib.request.Request(
+                    url + "api/copy-work-contact-file",
+                    data=json.dumps({"path": "sample.pdf"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with patch("multidocu_collator.flows.summary_server_flow.copy_file_to_clipboard") as copier:
+                    self.assertTrue(json.load(urllib.request.urlopen(copy_request))["ok"])
+                copier.assert_called_once_with((work / "sample.pdf").resolve())
                 request = urllib.request.Request(
                     url + "api/refresh-work-contact",
                     data=b"{}",
