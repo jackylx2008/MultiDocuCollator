@@ -160,7 +160,10 @@ HTML = r'''<!doctype html>
     $('draftApply').addEventListener('click',()=>{if(!activeDraftFields||!activeDraftFields.facts.isConnected){alert('新增行已刷新，请重新生成草稿');return}const recipient=$('draftRecipient').value.trim(),subject=$('draftSubject').value.trim(),content=$('draftContent').value.trim();if(!recipient||!subject||!content){alert('请填写致送单位、事由和完整正文');return}activeDraftFields.recipient.value=recipient;activeDraftFields.subject.value=subject;activeDraftFields.content.value=content;$('draftDialog').close();activeDraftFields=null});
     $('editNumberMode').addEventListener('change',updateEditNumber);
     $('editCancel').addEventListener('click',()=>{$('editDialog').close();activeRecord=null});$('editForm').addEventListener('submit',async event=>{event.preventDefault();if(!activeRecord)return;const save=$('editSave');save.disabled=true;try{await post('/api/update-work-contact',{dataset_revision:data.dataset_revision,record_id:activeRecord.record_id,number_mode:$('editNumberMode').value,manual_number:$('editManualNumber').value,folder_date:$('editDate').value,recipient:$('editRecipient').value,subject:$('editSubject').value,content:$('editContent').value});location.reload()}catch(error){alert(`修改失败：${error.message}`);save.disabled=false}});
+    function showLatestSavedRecord(){if(!rows.length)return;const tableWrap=document.querySelector('.table-wrap');tableWrap.scrollTop=tableWrap.scrollHeight;if(window.matchMedia('(max-width:1100px)').matches)window.scrollTo(0,document.documentElement.scrollHeight)}
     $('refresh').addEventListener('click',async event=>{const control=event.currentTarget;control.disabled=true;try{await post('/api/refresh-work-contact',{});location.reload()}catch(error){alert(`刷新失败：${error.message}`);control.disabled=false}});$('search').addEventListener('input',render);$('statusFilter').addEventListener('change',render);render();checkLocalAi();
+    if('scrollRestoration' in history)history.scrollRestoration='manual';
+    window.addEventListener('load',()=>requestAnimationFrame(showLatestSavedRecord),{once:true});
   </script>
 </body>
 </html>
