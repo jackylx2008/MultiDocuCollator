@@ -76,6 +76,36 @@ def _next_code(records: list[dict[str, Any]], discipline: str) -> str:
     return f"{discipline}-{(max(numbers) if numbers else 0) + 1:03d}"
 
 
+def _manual_code(discipline: str, value: Any) -> str:
+    raw = str(value or "").strip()
+    match = re.fullmatch(rf"(?:{re.escape(discipline)}[-—－])?([0-9]{{1,6}})", raw)
+    if match is None or int(match[1]) == 0:
+        raise ValueError("手动编号须为 1 至 6 位正整数，可输入序号或类别-序号")
+    sequence = f"{int(match[1]):03d}"
+    return f"{discipline}-{sequence}"
+
+
+def _numbering(
+    records: list[dict[str, Any]], discipline: str, payload: dict[str, Any],
+    *, current: dict[str, Any] | None = None,
+) -> tuple[str, bool, str]:
+    mode = str(payload.get("number_mode") or ("keep" if current else "auto"))
+    if mode == "keep" and current is not None:
+        code = str(current.get("document_code") or "")
+        temporary = bool(current.get("temporary_number"))
+        document_no = str(current.get("original_document_no") or ("" if temporary else code))
+        return code, temporary, document_no
+    if mode not in {"auto", "temporary", "manual"}:
+        raise ValueError("编号方式无效")
+    others = [record for record in records if current is None or record.get("record_id") != current.get("record_id")]
+    code = (_manual_code(discipline, payload.get("manual_number")) if mode == "manual"
+            else _next_code(others, discipline))
+    if any(record.get("document_code") == code for record in others):
+        raise ValueError(f"编号已存在：{code}")
+    temporary = mode == "temporary"
+    return code, temporary, "" if temporary else code
+
+
 def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     with RECORD_MUTATION_LOCK:
         root = root.resolve(strict=True)
@@ -84,7 +114,7 @@ def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         discipline = _clean_component(payload.get("discipline"), "类别", max_length=30)
         if "-" in discipline:
             raise ValueError("类别不能包含连字符")
-        code = _next_code(data.get("records") or [], discipline)
+        code, temporary, document_no = _numbering(data.get("records") or [], discipline, payload)
         folder_name = _folder_name(code, values["folder_date"], values["subject"])
         final = root / folder_name
         if final.exists():
@@ -102,7 +132,7 @@ def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
             pdf = staging / f"{base}.pdf"
             write_work_contact_docx(
                 template, word,
-                document_no=code,
+                document_no=document_no,
                 document_date=values["folder_date"],
                 recipient=values["recipient"],
                 subject=values["subject"],
@@ -119,6 +149,7 @@ def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True,
             "document_code": code,
+            "temporary_number": temporary,
             "folder_path": folder_name,
             "dataset_revision": refreshed["dataset_revision"],
         }
@@ -171,7 +202,10 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         root = root.resolve(strict=True)
         data, record = _record_for_update(root, payload)
         values = _values(payload)
-        code = str(record.get("document_code") or "")
+        code, temporary, document_no = _numbering(
+            data.get("records") or [], str(record.get("discipline") or ""), payload,
+            current=record,
+        )
         if not code or not record.get("folder_path"):
             raise ValueError("当前联系单尚未整理成独立目录")
         source_dir = resolve_relative_directory(root, str(record["folder_path"]))
@@ -187,6 +221,9 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
             or values["subject"] != record.get("subject")
             or values["recipient"] != record.get("致送单位")
             or values["content"] != record.get("内容")
+            or code != record.get("document_code")
+            or temporary != bool(record.get("temporary_number"))
+            or document_no != str(record.get("original_document_no") or ("" if temporary else record.get("document_code") or ""))
         )
         if not changed:
             return {"ok": True, "changed": False, "dataset_revision": data["dataset_revision"]}
@@ -222,7 +259,7 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         write_work_contact_docx(
             source_word,
             new_word,
-            document_no=str(record.get("original_document_no") or code),
+            document_no=document_no,
             document_date=values["folder_date"],
             recipient=values["recipient"],
             subject=(

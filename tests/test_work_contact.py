@@ -36,6 +36,7 @@ from multidocu_collator.flows.work_contact_mutation import (
     update_work_contact,
 )
 from multidocu_collator.modules.summary_html import export_summary_html
+from multidocu_collator.modules.docx_parser import parse_docx
 from multidocu_collator.modules.work_contact import WRITING_SKILL_NAME, scan_work_contacts
 from multidocu_collator.modules.work_contact_ai import generate_work_contact_draft
 from multidocu_collator.modules.work_contact_document import write_work_contact_docx
@@ -64,6 +65,115 @@ STRUCTURAL_TEMPLATE_XML = '''<w:document xmlns:w="http://schemas.openxmlformats.
 
 
 class WorkContactTests(unittest.TestCase):
+    def test_number_modes_keep_temporary_number_out_of_word(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with ZipFile(root / TEMPLATE_NAME, "w") as archive:
+                archive.writestr("word/document.xml", STRUCTURAL_TEMPLATE_XML)
+            build_work_contact_archive(root)
+
+            def fake_pdf(_word: Path, pdf: Path) -> Path:
+                writer = PdfWriter()
+                writer.add_blank_page(width=595, height=842)
+                with pdf.open("wb") as stream:
+                    writer.write(stream)
+                return pdf
+
+            def dataset() -> dict:
+                return json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+
+            base = {"discipline": "质保", "folder_date": "2026-10-12", "recipient": "施工单位",
+                    "subject": "排水泵维修", "content": "请检查并维修排水泵。"}
+            with patch("multidocu_collator.flows.work_contact_mutation.export_pdf_with_word", side_effect=fake_pdf):
+                temporary_record = create_work_contact(root, {
+                    **base, "dataset_revision": dataset()["dataset_revision"], "number_mode": "temporary",
+                })
+                self.assertEqual(temporary_record["document_code"], "质保-001")
+                record = dataset()["records"][0]
+                self.assertTrue(record["temporary_number"])
+                self.assertEqual(record["original_document_no"], "")
+                word = root / next(item["path"] for item in record["files"] if item["role"] == "source_word")
+                self.assertEqual(parse_docx(word).document_no, "")
+
+                self.assertIn("质保-001", str(word))
+
+                kept = update_work_contact(root, {
+                    **base, "subject": "排水泵修复", "dataset_revision": dataset()["dataset_revision"],
+                    "record_id": record["record_id"], "number_mode": "keep",
+                })
+                self.assertTrue(kept["changed"])
+                record = dataset()["records"][0]
+                self.assertTrue(record["temporary_number"])
+                self.assertEqual(record["original_document_no"], "")
+
+                manual = update_work_contact(root, {
+                    **base, "subject": "排水泵修复", "dataset_revision": dataset()["dataset_revision"],
+                    "record_id": record["record_id"], "number_mode": "manual",
+                    "manual_number": "质保-023",
+                })
+                self.assertIn("质保-023", manual["folder_path"])
+                record = dataset()["records"][0]
+                self.assertFalse(record["temporary_number"])
+                self.assertEqual(record["original_document_no"], "质保-023")
+                word = root / next(item["path"] for item in record["files"] if item["role"] == "source_word")
+                self.assertEqual(parse_docx(word).document_no, "质保-023")
+                with self.assertRaisesRegex(ValueError, "编号已存在"):
+                    create_work_contact(root, {
+                        **base, "dataset_revision": dataset()["dataset_revision"],
+                        "number_mode": "manual", "manual_number": "023",
+                    })
+                with self.assertRaisesRegex(ValueError, "手动编号"):
+                    create_work_contact(root, {
+                        **base, "dataset_revision": dataset()["dataset_revision"],
+                        "number_mode": "manual", "manual_number": "任意文本",
+                    })
+                auto = create_work_contact(root, {
+                    **base, "subject": "消防设备维修", "dataset_revision": dataset()["dataset_revision"],
+                    "number_mode": "auto",
+                })
+                self.assertEqual(auto["document_code"], "质保-024")
+                record = next(item for item in dataset()["records"] if item["document_code"] == "质保-023")
+                reverted = update_work_contact(root, {
+                    **base, "subject": "排水泵修复", "dataset_revision": dataset()["dataset_revision"],
+                    "record_id": record["record_id"], "number_mode": "temporary",
+                })
+                self.assertIn("质保-025", reverted["folder_path"])
+                record = next(item for item in dataset()["records"] if item["document_code"] == "质保-025")
+                self.assertTrue(record["temporary_number"])
+                self.assertEqual(record["original_document_no"], "")
+                word = root / next(item["path"] for item in record["files"] if item["role"] == "source_word")
+                self.assertEqual(parse_docx(word).document_no, "")
+
+    def test_edit_preserves_existing_unnumbered_word(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root / "质保-001-2026-08-09_设备维修"
+            folder.mkdir()
+            word = folder / "工作联系单（质保-001）_设备维修.docx"
+            with ZipFile(word, "w") as archive:
+                archive.writestr("word/document.xml", STRUCTURAL_TEMPLATE_XML)
+            build_work_contact_archive(root)
+            data = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+            record = data["records"][0]
+            self.assertTrue(record["temporary_number"])
+            self.assertEqual(record["original_document_no"], "质保—")
+
+            def fake_pdf(_word: Path, pdf: Path) -> Path:
+                writer = PdfWriter()
+                writer.add_blank_page(width=595, height=842)
+                with pdf.open("wb") as stream:
+                    writer.write(stream)
+                return pdf
+
+            with patch("multidocu_collator.flows.work_contact_mutation.export_pdf_with_word", side_effect=fake_pdf):
+                update_work_contact(root, {
+                    "dataset_revision": data["dataset_revision"], "record_id": record["record_id"],
+                    "number_mode": "keep", "folder_date": "2026-08-10", "recipient": "施工单位",
+                    "subject": "设备修复", "content": "请修复设备。",
+                })
+            refreshed = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))["records"][0]
+            self.assertTrue(refreshed["temporary_number"])
+            self.assertEqual(refreshed["original_document_no"], "质保—")
     def test_ai_draft_reads_current_writing_rules_and_only_returns_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
