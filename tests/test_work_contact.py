@@ -276,6 +276,8 @@ class WorkContactTests(unittest.TestCase):
             self.assertEqual(data["dataset_revision"], 1)
             html = (root / "主体工作联系单汇总.html").read_text(encoding="utf-8")
             self.assertIn("按状态筛选", html)
+            self.assertIn("/api/proofread-work-contact", html)
+            self.assertIn("AI 公文修订对照", html)
             self.assertNotIn("workflow-nav", html)
             self.assertNotIn("酒店需求单", html)
             hotel_html = root / "hotel.html"
@@ -398,6 +400,21 @@ class WorkContactTests(unittest.TestCase):
                     headers={"Content-Type": "application/json"},
                 )
                 self.assertEqual(json.load(urllib.request.urlopen(request))["records"], 0)
+                proofread_request = urllib.request.Request(
+                    url + "api/proofread-work-contact",
+                    data=json.dumps({"content": "原始正文"}, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.proofread_official_content",
+                    return_value="修订正文",
+                ) as proofreader:
+                    result = json.load(urllib.request.urlopen(proofread_request))
+                self.assertEqual(result["revised_content"], "修订正文")
+                self.assertTrue(any(part["changed"] for part in result["revised_segments"]))
+                proofreader.assert_called_once_with(
+                    "原始正文", context=context, content_label="工作联系单正文"
+                )
                 with self.assertRaises(urllib.error.HTTPError):
                     urllib.request.urlopen(url + "work-contact/%2e%2e/hotel/hotel.html")
             finally:

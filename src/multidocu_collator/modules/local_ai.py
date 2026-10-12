@@ -129,20 +129,21 @@ def proofread_official_content(
     *,
     context: AppContext,
     system_name: str | None = None,
+    content_label: str = "需求内容",
 ) -> str:
     system = system_name or platform.system()
     if system != "Windows":
         raise RuntimeError("本地 AI 勘误当前仅支持 Windows")
     text = str(content or "").strip()
     if not text:
-        raise ValueError("需求内容不能为空")
+        raise ValueError(f"{content_label}不能为空")
     if len(text) > 4000:
-        raise ValueError("需求内容不能超过 4000 个字符")
+        raise ValueError(f"{content_label}不能超过 4000 个字符")
     text = "\n".join(
         line for line in text.splitlines() if line.strip() != "以下空白"
     ).strip()
     if not text:
-        raise ValueError("删除“以下空白”后，需求内容不能为空")
+        raise ValueError(f"删除“以下空白”后，{content_label}不能为空")
     models = _healthcheck(context)
     request_model = _matching_model(context.local_ai_model, models)
     if request_model is None:
@@ -173,7 +174,7 @@ def proofread_official_content(
                         "只输出修订后的正文，不要解释、标题、引号或 Markdown。"
                     ),
                 },
-                {"role": "user", "content": "请勘误以下需求内容：\n\n" + text},
+                {"role": "user", "content": f"请勘误以下{content_label}：\n\n" + text},
             ],
         },
         timeout=context.local_ai_request_timeout_sec,

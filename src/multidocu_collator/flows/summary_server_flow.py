@@ -166,6 +166,7 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 "/api/save-manual-statuses",
                 "/api/update-record-content",
                 "/api/proofread-content",
+                "/api/proofread-work-contact",
             }:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
@@ -234,11 +235,15 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     logger.info("已临时保存新增需求内容草稿")
                     self._send_json(HTTPStatus.OK, result)
                     return
-                if route == "/api/proofread-content":
-                    original = str(payload.get("requirement_content") or "")
-                    revised = proofread_official_content(
-                        original,
-                        context=context,
+                if route in {"/api/proofread-content", "/api/proofread-work-contact"}:
+                    work_contact = route == "/api/proofread-work-contact"
+                    if work_contact and work_root is None:
+                        raise FileNotFoundError("主体工作联系单目录未配置")
+                    original = str(payload.get("content" if work_contact else "requirement_content") or "")
+                    revised = (
+                        proofread_official_content(
+                            original, context=context, content_label="工作联系单正文"
+                        ) if work_contact else proofread_official_content(original, context=context)
                     )
                     original_segments, revised_segments = build_text_comparison(
                         original.strip(), revised
