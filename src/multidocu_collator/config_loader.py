@@ -116,6 +116,7 @@ def load_settings(project_root: Path) -> dict[str, Any]:
     data = _read_simple_yaml(path)
     app = data.get("app") or {}
     flow = (data.get("flows") or {}).get("build_archive") or {}
+    work_flow = (data.get("flows") or {}).get("work_contact") or {}
     configured_data_root = str(flow.get("data_root") or "")
     data_root = os.environ.get("HOTEL_REQUIREMENTS_ROOT", "").strip()
     return {
@@ -124,6 +125,10 @@ def load_settings(project_root: Path) -> dict[str, Any]:
         "json_name": str(flow.get("json_name") or DEFAULT_JSON_NAME),
         "html_name": str(flow.get("html_name") or DEFAULT_HTML_NAME),
         "template_name": str(flow.get("template_name") or DEFAULT_TEMPLATE_NAME),
+        "work_contact_root": str(Path(
+            os.environ.get("WORK_CONTACT_ROOT", "").strip()
+            or str(work_flow.get("data_root") or "")
+        ).expanduser()),
         "local_ai_base_url": os.environ.get(
             "LLAMACPP_BASE_URL", "http://127.0.0.1:8080/v1"
         ).strip(),

@@ -17,6 +17,7 @@ class AppContext:
     local_ai_model: str = "Qwen3.8-27B-Q4_K_M.gguf"
     local_ai_api_key: str = ""
     local_ai_request_timeout_sec: int = 180
+    work_contact_root: Path | None = None
 
     @property
     def json_path(self) -> Path:

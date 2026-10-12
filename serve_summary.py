@@ -22,7 +22,7 @@
 
 输出：
   源码模式在控制台显示本地访问地址，按 Ctrl+C 停止服务；Windows EXE 显示服务
-  控制窗口，可打开汇总页面或停止服务。仅在用户点击末行“保存”时创建新资料目录并
+  控制窗口，可选择“酒店需求单”或“主体工作联系单”，也可停止服务。仅在用户点击末行“保存”时创建新资料目录并
   更新 JSON/HTML；点击记录删除按钮时，只把既有资料目录移动到同级 _trash 并刷新
   成果，不执行永久删除。
 """
@@ -53,6 +53,10 @@ from logging_config import configure_utf8_stdio, setup_logger
 from multidocu_collator.config_loader import load_settings
 from multidocu_collator.context import AppContext
 from multidocu_collator.flows.build_archive_flow import run_build_archive
+from multidocu_collator.flows.work_contact_flow import (
+    HTML_NAME as WORK_CONTACT_HTML_NAME,
+    build_work_contact_archive,
+)
 from multidocu_collator.flows.summary_server_flow import (
     _open_summary_browser,
     create_summary_server,
@@ -65,7 +69,7 @@ def _bundled_icon_path() -> Path:
     return bundle_root / "serve_summary.ico"
 
 
-def _run_control_window(context: AppContext, *, open_browser: bool) -> None:
+def _run_control_window(context: AppContext) -> None:
     from tkinter import Button, Frame, Label, StringVar, Tk
 
     server, url = create_summary_server(context)
@@ -74,9 +78,9 @@ def _run_control_window(context: AppContext, *, open_browser: bool) -> None:
     except Exception:
         server.server_close()
         raise
-    root.title("酒店需求工作联系单汇总")
+    root.title("工作联系单汇总")
     root.resizable(False, False)
-    root.geometry("430x190")
+    root.geometry("560x190")
     icon_path = _bundled_icon_path()
     if icon_path.is_file():
         try:
@@ -96,8 +100,11 @@ def _run_control_window(context: AppContext, *, open_browser: bool) -> None:
 
     stopping = False
 
-    def open_page() -> None:
+    def open_hotel() -> None:
         _open_summary_browser(url)
+
+    def open_work_contact() -> None:
+        _open_summary_browser(url + "work-contact/")
 
     def stop_service() -> None:
         nonlocal stopping
@@ -105,7 +112,8 @@ def _run_control_window(context: AppContext, *, open_browser: bool) -> None:
             return
         stopping = True
         status.set("正在停止本地汇总服务……")
-        open_button.configure(state="disabled")
+        hotel_button.configure(state="disabled")
+        work_contact_button.configure(state="disabled")
         stop_button.configure(state="disabled")
 
         def shutdown() -> None:
@@ -123,16 +131,22 @@ def _run_control_window(context: AppContext, *, open_browser: bool) -> None:
 
         root.after(50, wait_for_shutdown)
 
-    open_button = Button(actions, text="打开汇总页面", width=15, command=open_page)
-    open_button.pack(side="left", padx=6)
+    hotel_button = Button(actions, text="酒店需求单", width=15, command=open_hotel)
+    hotel_button.pack(side="left", padx=6)
+    work_contact_button = Button(
+        actions, text="主体工作联系单", width=15, command=open_work_contact
+    )
+    work_contact_button.pack(side="left", padx=6)
+    if not context.work_contact_root or not (
+        context.work_contact_root / WORK_CONTACT_HTML_NAME
+    ).is_file():
+        work_contact_button.configure(state="disabled")
     stop_button = Button(actions, text="停止服务", width=15, command=stop_service)
     stop_button.pack(side="left", padx=6)
     root.protocol("WM_DELETE_WINDOW", stop_service)
 
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    if open_browser:
-        root.after(250, open_page)
     root.mainloop()
 
 
@@ -149,6 +163,7 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--data-root", help="覆盖配置中的资料根目录")
+    parser.add_argument("--work-contact-root", help="覆盖主体工作联系单资料目录")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     args = parser.parse_args()
     settings = load_settings(PROJECT_ROOT)
@@ -164,12 +179,21 @@ def main() -> int:
         local_ai_model=settings["local_ai_model"],
         local_ai_api_key=settings["local_ai_api_key"],
         local_ai_request_timeout_sec=settings["local_ai_request_timeout_sec"],
+        work_contact_root=Path(args.work_contact_root or settings["work_contact_root"]).expanduser(),
     )
     try:
         # 服务启动时先从实际资料目录重建 JSON/HTML，避免打开过期页面。
         run_build_archive(context)
+        if context.work_contact_root.is_dir():
+            build_work_contact_archive(context.work_contact_root)
+        elif args.work_contact_root:
+            raise FileNotFoundError(f"主体工作联系单目录不存在: {context.work_contact_root}")
+        else:
+            logging.getLogger(__name__).warning(
+                "主体工作联系单目录不存在，已跳过该工作流: %s", context.work_contact_root
+            )
         if getattr(sys, "frozen", False):
-            _run_control_window(context, open_browser=not args.no_browser)
+            _run_control_window(context)
         else:
             run_summary_server(context, open_browser=not args.no_browser)
     except Exception as exc:

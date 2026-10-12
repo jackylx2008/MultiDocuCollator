@@ -7,3 +7,5 @@ flows:
     json_name: ${ARCHIVE_JSON_NAME:-酒店需求工作联系单数据.json}
     html_name: ${ARCHIVE_HTML_NAME:-酒店需求工作联系单汇总.html}
     template_name: ${ARCHIVE_TEMPLATE_NAME:-需求工作联系单模板.docx}
+  work_contact:
+    data_root: ${CLOUDSTATION_ROOT}/国会二期/02 备忘录/主体工作联系单

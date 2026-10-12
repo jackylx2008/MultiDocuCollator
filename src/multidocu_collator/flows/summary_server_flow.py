@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import platform
 import subprocess
 import webbrowser
@@ -10,7 +11,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from logging_config import get_logger
 
@@ -37,6 +38,7 @@ from .new_content_draft_flow import (
 )
 from .update_print_status_flow import update_print_statuses
 from .update_record_content_flow import update_record_content
+from .work_contact_flow import HTML_NAME as WORK_HTML_NAME, build_work_contact_archive
 
 
 logger = get_logger(__name__)
@@ -75,6 +77,7 @@ def _open_summary_browser(url: str, *, system_name: str | None = None) -> None:
 
 def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
     root = context.data_root.resolve()
+    work_root = context.work_contact_root.resolve() if context.work_contact_root else None
     html_name = context.html_name
 
     class SummaryHandler(SimpleHTTPRequestHandler):
@@ -87,6 +90,29 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802 - http.server 固定接口名
             route = urlsplit(self.path).path
+            if route == "/work-contact":
+                self.send_response(HTTPStatus.MOVED_PERMANENTLY)
+                self.send_header("Location", "/work-contact/")
+                self.end_headers()
+                return
+            if route == "/work-contact/":
+                if work_root is None:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                self._send_work_file(work_root / WORK_HTML_NAME)
+                return
+            if route.startswith("/work-contact/"):
+                if work_root is None:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                try:
+                    relative = unquote(route.removeprefix("/work-contact/"))
+                    target = resolve_relative_file(work_root, relative)
+                except (ValueError, FileNotFoundError):
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                self._send_work_file(target)
+                return
             if route == "/api/local-ai-status":
                 result = local_ai_status(context)
                 self._send_json(HTTPStatus.OK, result)
@@ -101,6 +127,21 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 self.path = "/" + quote(html_name)
             super().do_GET()
 
+        def _send_work_file(self, path: Path) -> None:
+            if not path.is_file():
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            if path.suffix.lower() in {".html", ".json"}:
+                content_type += "; charset=utf-8"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(path.stat().st_size))
+            self.end_headers()
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    self.wfile.write(chunk)
+
         def do_POST(self) -> None:  # noqa: N802 - http.server 固定接口名
             route = urlsplit(self.path).path
             if route not in {
@@ -110,6 +151,7 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 "/api/save-new-content-draft",
                 "/api/delete-record",
                 "/api/refresh-archive",
+                "/api/refresh-work-contact",
                 "/api/save-print-status",
                 "/api/save-manual-statuses",
                 "/api/update-record-content",
@@ -128,6 +170,13 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     with RECORD_MUTATION_LOCK:
                         result = run_build_archive(context)
                     logger.info("已从实际资料目录重新扫描并刷新汇总")
+                    self._send_json(HTTPStatus.OK, result)
+                    return
+                if route == "/api/refresh-work-contact":
+                    if work_root is None:
+                        raise FileNotFoundError("主体工作联系单目录未配置")
+                    with RECORD_MUTATION_LOCK:
+                        result = build_work_contact_archive(work_root)
                     self._send_json(HTTPStatus.OK, result)
                     return
                 if route in {"/api/save-print-status", "/api/save-manual-statuses"}:
