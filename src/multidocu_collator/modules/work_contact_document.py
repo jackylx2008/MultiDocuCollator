@@ -56,8 +56,13 @@ def _replace_body(document: ET.Element, content: str) -> None:
     if not labels or labels != list(range(labels[0], labels[-1] + 1)):
         raise ValueError("主体联系单应包含连续的“内容：”段落")
     start = labels[-1]
+    markers = [
+        index for index in range(start + 1, len(paragraphs))
+        if _paragraph_text(paragraphs[index]).strip() == "以下空白"
+    ]
+    footer_start = markers[-1] + 1 if markers else start + 1
     end = next(
-        (index for index in range(start + 1, len(paragraphs))
+        (index for index in range(footer_start, len(paragraphs))
          if BODY_END.match(_paragraph_text(paragraphs[index]).strip())
          and not _paragraph_text(paragraphs[index]).strip().startswith("以下空白")),
         None,

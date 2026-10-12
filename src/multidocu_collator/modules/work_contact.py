@@ -36,19 +36,36 @@ def _body_text(path: Path) -> str:
             document = ET.fromstring(archive.read("word/document.xml"))
     except (BadZipFile, KeyError, ET.ParseError) as exc:
         raise ValueError(f"无法读取 DOCX: {path.name}: {exc}") from exc
-    paragraphs = [
-        "".join(node.text or "" for node in paragraph.iter(f"{W}t")).strip()
+    raw_paragraphs = [
+        "".join(node.text or "" for node in paragraph.iter(f"{W}t"))
         for paragraph in document.iter(f"{W}p")
     ]
-    start = next(
-        (index for index, line in enumerate(paragraphs) if re.match(r"^内\s*容\s*[：:]", line)),
-        None,
-    )
+    paragraphs = [line.strip() for line in raw_paragraphs]
+    labels = [
+        index for index, line in enumerate(paragraphs)
+        if re.match(r"^内\s*容\s*[：:]", line)
+    ]
+    start = labels[0] if labels else None
     if start is None:
         return ""
+    for index in labels[1:]:
+        if index != start + 1:
+            break
+        start = index
     first = re.sub(r"^内\s*容\s*[：:]", "", paragraphs[start]).strip()
+    tail = paragraphs[start + 1 :]
+    # 本程序生成的联系单在独立的“以下空白”前固定空一行；用它识别新版式，
+    # 避免改变历史 Word 中仅供排版的空段落的既有读取结果。
+    markers = [index for index, line in enumerate(tail) if line == "以下空白"]
+    if markers and markers[-1] > 0 and not tail[markers[-1] - 1]:
+        lines = raw_paragraphs[start + 1 : start + 1 + markers[-1]]
+        content = [re.sub(r"^内\s*容\s*[：:]", "", raw_paragraphs[start])] if first else []
+        content.extend(lines)
+        while content and not content[-1].strip():
+            content.pop()
+        return "\n".join(content).strip()
     content = [first] if first else []
-    for line in paragraphs[start + 1 :]:
+    for line in tail:
         if BODY_END.match(line):
             break
         if not content and re.fullmatch(r"内\s*容\s*[：:]\s*", line):

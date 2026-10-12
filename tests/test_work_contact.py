@@ -65,6 +65,45 @@ STRUCTURAL_TEMPLATE_XML = '''<w:document xmlns:w="http://schemas.openxmlformats.
 
 
 class WorkContactTests(unittest.TestCase):
+    def test_new_contact_preserves_blank_lines_in_body(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with ZipFile(root / TEMPLATE_NAME, "w") as archive:
+                archive.writestr("word/document.xml", STRUCTURAL_TEMPLATE_XML)
+            build_work_contact_archive(root)
+            content = "请检查设备。\n\n备注：请同步检查阀门。\n\n　　完成后反馈。"
+
+            def fake_pdf(_word: Path, pdf: Path) -> Path:
+                writer = PdfWriter()
+                writer.add_blank_page(width=595, height=842)
+                with pdf.open("wb") as stream:
+                    writer.write(stream)
+                return pdf
+
+            with patch("multidocu_collator.flows.work_contact_mutation.export_pdf_with_word", side_effect=fake_pdf):
+                revision = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))["dataset_revision"]
+                result = create_work_contact(root, {
+                    "dataset_revision": revision, "discipline": "质保", "number_mode": "temporary",
+                    "folder_date": "2026-10-12", "recipient": "施工单位",
+                    "subject": "设备维修", "content": content,
+                })
+            self.assertTrue(result["ok"])
+            data = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+            record = data["records"][0]
+            self.assertEqual(record["内容"], content)
+            self.assertEqual(record["original_document_no"], "质保-")
+            revised = "请检查设备。\n\n备注：同步检查阀门。\n\n　　完成后提交记录。"
+            with patch("multidocu_collator.flows.work_contact_mutation.export_pdf_with_word", side_effect=fake_pdf):
+                changed = update_work_contact(root, {
+                    "dataset_revision": data["dataset_revision"], "record_id": record["record_id"],
+                    "number_mode": "keep", "folder_date": record["folder_date"],
+                    "recipient": record["致送单位"], "subject": record["subject"],
+                    "content": revised,
+                })
+            self.assertTrue(changed["changed"])
+            refreshed = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+            self.assertEqual(refreshed["records"][0]["内容"], revised)
+
     def test_generated_contact_body_starts_at_top_of_template_cell(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
