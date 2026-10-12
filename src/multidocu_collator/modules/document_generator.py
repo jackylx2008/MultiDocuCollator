@@ -50,15 +50,27 @@ def _parse_preserving_namespaces(xml: bytes) -> ET.Element:
 
 
 def _serialize_preserving_root(document: ET.Element, original: bytes) -> bytes:
-    """保留 Word 根节点中 mc:Ignorable 依赖的未使用命名空间声明。"""
+    """合并原始声明与序列化新增声明，保留 mc:Ignorable 所需前缀。"""
     generated = ET.tostring(document, encoding="utf-8", xml_declaration=True)
     original_match = re.search(br"<w:document\b[^>]*>", original)
     generated_match = re.search(br"<w:document\b[^>]*>", generated)
     if not original_match or not generated_match:
         raise ValueError("模板 document.xml 根节点异常")
+    original_root = original_match.group(0)
+    generated_root = generated_match.group(0)
+    declaration = re.compile(br'\s+(xmlns(?::[A-Za-z_][\w.-]*)?)="([^"]*)"')
+    existing = {match.group(1): match.group(2) for match in declaration.finditer(generated_root)}
+    missing = []
+    for match in declaration.finditer(original_root):
+        name, namespace = match.group(1), match.group(2)
+        if name not in existing:
+            missing.append(match.group(0))
+        elif existing[name] != namespace:
+            raise ValueError(f"Word 命名空间前缀冲突: {name.decode('ascii')}")
+    merged_root = generated_root[:-1] + b"".join(missing) + b">"
     return (
         generated[: generated_match.start()]
-        + original_match.group(0)
+        + merged_root
         + generated[generated_match.end() :]
     )
 

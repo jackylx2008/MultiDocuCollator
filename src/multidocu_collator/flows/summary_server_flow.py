@@ -39,6 +39,11 @@ from .new_content_draft_flow import (
 from .update_print_status_flow import update_print_statuses
 from .update_record_content_flow import update_record_content
 from .work_contact_flow import HTML_NAME as WORK_HTML_NAME, build_work_contact_archive
+from .work_contact_mutation import (
+    create_work_contact,
+    delete_work_contact,
+    update_work_contact,
+)
 
 
 logger = get_logger(__name__)
@@ -152,6 +157,11 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 "/api/delete-record",
                 "/api/refresh-archive",
                 "/api/refresh-work-contact",
+                "/api/create-work-contact",
+                "/api/update-work-contact",
+                "/api/delete-work-contact",
+                "/api/open-work-contact-path",
+                "/api/copy-work-contact-file",
                 "/api/save-print-status",
                 "/api/save-manual-statuses",
                 "/api/update-record-content",
@@ -178,6 +188,36 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     with RECORD_MUTATION_LOCK:
                         result = build_work_contact_archive(work_root)
                     self._send_json(HTTPStatus.OK, result)
+                    return
+                if route in {
+                    "/api/create-work-contact",
+                    "/api/update-work-contact",
+                    "/api/delete-work-contact",
+                    "/api/open-work-contact-path",
+                    "/api/copy-work-contact-file",
+                }:
+                    if work_root is None:
+                        raise FileNotFoundError("主体工作联系单目录未配置")
+                    if route == "/api/create-work-contact":
+                        self._send_json(HTTPStatus.CREATED, create_work_contact(work_root, payload))
+                        return
+                    if route == "/api/update-work-contact":
+                        self._send_json(HTTPStatus.OK, update_work_contact(work_root, payload))
+                        return
+                    if route == "/api/delete-work-contact":
+                        self._send_json(HTTPStatus.OK, delete_work_contact(work_root, payload))
+                        return
+                    relative = payload.get("path")
+                    if not isinstance(relative, str):
+                        raise ValueError("path 必须是相对路径字符串")
+                    if route == "/api/copy-work-contact-file":
+                        target_file = resolve_relative_file(work_root, relative)
+                        copy_file_to_clipboard(target_file)
+                        self._send_json(HTTPStatus.OK, {"ok": True})
+                        return
+                    target_directory = resolve_relative_directory(work_root, relative)
+                    open_directory(target_directory)
+                    self._send_json(HTTPStatus.OK, {"ok": True})
                     return
                 if route in {"/api/save-print-status", "/api/save-manual-statuses"}:
                     result = update_print_statuses(context, payload)
