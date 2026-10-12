@@ -419,6 +419,52 @@ class WorkContactTests(unittest.TestCase):
                 self.assertEqual(custom["document_code"], "给排水-001")
                 self.assertTrue((root / custom["folder_path"]).is_dir())
 
+    def test_content_update_uses_scan_attachments_when_no_issued_pdf_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root / "质保-001-2026-08-09_设备维修"
+            folder.mkdir()
+            word = folder / "工作联系单（质保-001）_设备维修.docx"
+            with ZipFile(word, "w") as archive:
+                archive.writestr("word/document.xml", STRUCTURAL_TEMPLATE_XML)
+            scan = folder / "工作联系单（质保-001）_设备维修_扫描件.pdf"
+            original = PdfWriter()
+            original.add_blank_page(width=610, height=800)
+            original.add_blank_page(width=430, height=700)
+            with scan.open("wb") as stream:
+                original.write(stream)
+            original_bytes = scan.read_bytes()
+            build_work_contact_archive(root)
+            data = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+            record = data["records"][0]
+            self.assertFalse(any(item["role"] == "issued_pdf" for item in record["files"]))
+
+            def fake_pdf(_word: Path, pdf: Path) -> Path:
+                writer = PdfWriter()
+                writer.add_blank_page(width=595, height=842)
+                with pdf.open("wb") as stream:
+                    writer.write(stream)
+                return pdf
+
+            with patch("multidocu_collator.flows.work_contact_mutation.export_pdf_with_word", side_effect=fake_pdf):
+                update_work_contact(root, {
+                    "dataset_revision": data["dataset_revision"], "record_id": record["record_id"],
+                    "number_mode": "keep", "folder_date": record["folder_date"],
+                    "recipient": record["致送单位"], "subject": record["subject"],
+                    "content": "更新后的维修要求。",
+                })
+            issued = folder / "工作联系单（质保-001）_设备维修.pdf"
+            self.assertTrue(issued.is_file())
+            with issued.open("rb") as stream:
+                pages = PdfReader(stream).pages
+                self.assertEqual(len(pages), 2)
+                self.assertEqual(float(pages[0].mediabox.width), 595)
+                self.assertEqual(float(pages[1].mediabox.width), 430)
+            self.assertEqual(scan.read_bytes(), original_bytes)
+            self.assertEqual(parse_docx(word).document_no, "质保—")
+            refreshed = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+            self.assertEqual(refreshed["records"][0]["内容"], "更新后的维修要求。")
+
     def test_flat_documents_are_grouped_and_content_is_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -240,8 +240,14 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
             (item for item in record.get("files") or [] if item.get("role") == "issued_pdf"),
             None,
         )
+        signed_item = next(
+            (item for item in record.get("files") or [] if item.get("role") == "signed_scan"),
+            None,
+        )
+        # 旧资料可能只有扫描件；用它的后续页面作为新 PDF 的附件来源，原扫描件仍保留。
+        source_pdf_item = issued_item or signed_item
         source_pdf = (
-            resolve_relative_file(root, str(issued_item["path"])) if issued_item else None
+            resolve_relative_file(root, str(source_pdf_item["path"])) if source_pdf_item else None
         )
         if source_pdf and source_pdf.parent != source_dir:
             raise ValueError("PDF 文件不在联系单一级目录")
@@ -277,7 +283,7 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
             generated_pdf.replace(new_pdf)
         if source_word.name != new_word.name:
             (staging / source_word.name).unlink()
-        if source_pdf and source_pdf.name != new_pdf.name:
+        if issued_item and source_pdf and source_pdf.name != new_pdf.name:
             (staging / source_pdf.name).unlink()
         source_dir.replace(snapshot)
         try:
