@@ -16,7 +16,7 @@ from pypdf import PdfReader
 from ..modules.desktop import resolve_relative_directory, resolve_relative_file
 from ..modules.pdf_exporter import export_pdf_with_word, replace_pdf_first_page
 from ..modules.work_contact_document import write_work_contact_docx
-from ..modules.work_contact import TEMPLATE_NAME
+from ..modules.work_contact import TEMPLATE_NAME, TEMPLATE_NAMES
 from .create_record_flow import _clean_component
 from .delete_record_flow import _trash_destination
 from .mutation_lock import RECORD_MUTATION_LOCK
@@ -96,9 +96,11 @@ def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         final = root / folder_name
         if final.exists():
             raise FileExistsError(f"联系单目录已存在: {folder_name}")
-        template = root / TEMPLATE_NAME
+        template = root / TEMPLATE_NAMES.get(discipline, TEMPLATE_NAME)
         if not template.is_file():
-            raise FileNotFoundError(f"缺少主体工作联系单模板: {template}")
+            template = root / TEMPLATE_NAME
+        if not template.is_file():
+            raise FileNotFoundError(f"缺少{discipline}工作联系单模板")
         base = _base_name(code, values["subject"])
         with tempfile.TemporaryDirectory(prefix=".new_work_contact_", dir=root) as temporary:
             staging = Path(temporary) / folder_name

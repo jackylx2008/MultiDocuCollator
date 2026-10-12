@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -179,3 +181,85 @@ def organize_work_contacts(root: Path, backup: Path, *, scheme: str) -> dict:
             "json_path": result["json_path"],
             "html_path": result["html_path"],
         }
+
+
+def renumber_organized_work_contacts(root: Path, backup: Path) -> dict:
+    """把已按“主体”统一编号的目录改为质保、维保各自连续编号。"""
+    with RECORD_MUTATION_LOCK:
+        root = root.resolve(strict=True)
+        backup = backup.resolve(strict=True)
+        if backup.parent != root or not backup.name.startswith(BACKUP_PREFIX):
+            raise ValueError("备份必须位于主体工作联系单资料根目录")
+        manifest = json.loads((backup / BACKUP_MANIFEST).read_text(encoding="utf-8"))
+        if Path(manifest.get("source_root") or "").resolve() != root:
+            raise ValueError("备份来源目录与当前目录不一致")
+        expected_hashes = Counter(
+            item["sha256"] for item in manifest.get("files") or []
+            if "/" not in item["path"] and item["path"].lower().endswith((".docx", ".pdf"))
+        )
+        records, _ = scan_work_contacts(root)
+        if not records or any(not record.get("folder_path") for record in records):
+            raise ValueError("联系单尚未全部整理为独立目录")
+        if any(record.get("discipline") != "主体" for record in records):
+            raise ValueError("当前目录不是统一“主体”编号，无法重复调整")
+        actual_hashes = Counter(
+            sha256_file(root / item["path"])
+            for record in records for item in record["files"]
+        )
+        if actual_hashes != expected_hashes:
+            raise ValueError("已整理资料与原始备份文件不一致")
+
+        counters: dict[str, int] = {}
+        changes: list[tuple[Path, Path, list[tuple[Path, Path]]]] = []
+        for record in records:
+            match = re.match(r"^(质保|维保)[—-]?", str(record.get("original_document_no") or ""))
+            if match is None:
+                raise ValueError(f"无法判断原件类别: {record['document_code']}")
+            kind = match.group(1)
+            counters[kind] = counters.get(kind, 0) + 1
+            new_code = f"{kind}-{counters[kind]:03d}"
+            old_code = str(record["document_code"])
+            source_dir = root / str(record["folder_path"])
+            target_dir = root / f"{new_code}-{record['folder_date']}_{record['subject']}"
+            if (source_dir.resolve().parent != root or target_dir.resolve().parent != root
+                    or target_dir.exists()):
+                raise ValueError(f"目标目录不安全或已存在: {target_dir.name}")
+            file_changes: list[tuple[Path, Path]] = []
+            for item in record["files"]:
+                source = root / str(item["path"])
+                old_marker = f"（{old_code}）"
+                if source.parent != source_dir or old_marker not in source.name:
+                    raise ValueError(f"文件名与目录编号不一致: {source.name}")
+                destination = source.with_name(source.name.replace(old_marker, f"（{new_code}）", 1))
+                if destination.exists() or destination.parent != source_dir:
+                    raise ValueError(f"目标文件已存在或越界: {destination.name}")
+                file_changes.append((source, destination))
+            changes.append((source_dir, target_dir, file_changes))
+
+        metadata = {
+            name: (root / name).read_bytes() if (root / name).is_file() else None
+            for name in (JSON_NAME, HTML_NAME)
+        }
+        moved: list[tuple[Path, Path]] = []
+        try:
+            for source_dir, target_dir, file_changes in changes:
+                source_dir.replace(target_dir)
+                moved.append((source_dir, target_dir))
+                for source, destination in file_changes:
+                    moved_source = target_dir / source.name
+                    moved_destination = target_dir / destination.name
+                    moved_source.replace(moved_destination)
+                    moved.append((moved_source, moved_destination))
+            result = build_work_contact_archive(root)
+            if result["records"] != len(changes):
+                raise ValueError("重新编号后联系单记录数不一致")
+        except Exception:
+            for source, destination in reversed(moved):
+                if destination.exists() and not source.exists():
+                    destination.replace(source)
+            for name, original in metadata.items():
+                if original is not None:
+                    (root / name).write_bytes(original)
+            raise
+        return {"records": len(changes), "files": sum(len(files) for _, _, files in changes),
+                "by_kind": counters, "backup": str(backup)}

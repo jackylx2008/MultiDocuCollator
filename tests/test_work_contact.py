@@ -27,6 +27,7 @@ from multidocu_collator.flows.work_contact_migration import (
     backup_work_contacts,
     organize_work_contacts,
     plan_work_contact_organization,
+    renumber_organized_work_contacts,
 )
 from multidocu_collator.flows.work_contact_mutation import (
     TEMPLATE_NAME,
@@ -155,6 +156,25 @@ class WorkContactTests(unittest.TestCase):
             self.assertEqual(word.read_bytes(), original)
             self.assertFalse((root / "主体-001-2026-08-09_关于设备维修事宜").exists())
             self.assertTrue((backup / word.name).is_file())
+
+    def test_renumber_organized_contacts_separately_by_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index, kind in enumerate(("维保", "质保", "质保"), start=1):
+                word = root / f"2026-08-{index:02d}_工作联系单_关于设备维修事宜{index}.docx"
+                xml = DOCUMENT_XML.replace("质保—", f"{kind}—")
+                with ZipFile(word, "w") as archive:
+                    archive.writestr("word/document.xml", xml)
+            backup = backup_work_contacts(root)
+            organize_work_contacts(root, backup, scheme="unified")
+            result = renumber_organized_work_contacts(root, backup)
+            self.assertEqual(result["by_kind"], {"维保": 1, "质保": 2})
+            records, _ = scan_work_contacts(root)
+            self.assertEqual(
+                [record["document_code"] for record in records],
+                ["维保-001", "质保-001", "质保-002"],
+            )
+            self.assertTrue(all("主体-" not in record["folder_path"] for record in records))
 
     def test_create_update_and_delete_organized_contact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
