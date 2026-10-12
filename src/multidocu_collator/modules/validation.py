@@ -73,8 +73,16 @@ def validate_dataset(
                 continue
             if path.stat().st_size != int(item.get("size") or -1):
                 errors.append(f"文件大小不一致: {relative}")
-            if verify_hashes and sha256_file(path) != item.get("sha256"):
-                errors.append(f"文件哈希不一致: {relative}")
+            if verify_hashes:
+                expected_hash = item.get("sha256")
+                if expected_hash is None:
+                    warnings.append(f"文件暂不可读取，未校验哈希: {relative}")
+                else:
+                    try:
+                        if sha256_file(path) != expected_hash:
+                            errors.append(f"文件哈希不一致: {relative}")
+                    except PermissionError:
+                        warnings.append(f"文件暂不可读取，未校验哈希: {relative}")
     return {"errors": errors, "warnings": warnings}
 
 

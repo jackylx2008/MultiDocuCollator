@@ -41,13 +41,18 @@ def _file_role(path: Path) -> str:
 
 def _file_item(path: Path, root: Path) -> dict[str, Any]:
     stat = path.stat()
+    try:
+        digest = sha256_file(path)
+    except PermissionError:
+        # CAD 等程序可能独占图纸；仍可从目录项展示文件，稍后再校验内容。
+        digest = None
     return {
         "path": relative_posix(path, root),
         "name": path.name,
         "extension": path.suffix.lower(),
         "role": _file_role(path),
         "size": stat.st_size,
-        "sha256": sha256_file(path),
+        "sha256": digest,
         "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(
             timespec="seconds"
         ),
@@ -98,7 +103,12 @@ def _record(directory: Path, root: Path, match: re.Match[str]) -> dict[str, Any]
     file_items: list[dict[str, Any]] = []
     for path in files:
         try:
-            file_items.append(_file_item(path, root))
+            item = _file_item(path, root)
+            file_items.append(item)
+            if item["sha256"] is None:
+                warnings.append(
+                    f"资料文件“{relative_posix(path, root)}”暂被占用，内容哈希未校验"
+                )
         except PermissionError:
             warnings.append(
                 f"资料文件“{relative_posix(path, root)}”没有读取权限，已跳过"

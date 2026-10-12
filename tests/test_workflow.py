@@ -24,6 +24,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from multidocu_collator.modules.docx_parser import parse_docx
+from multidocu_collator.modules.file_utils import sha256_file
 from multidocu_collator.modules.document_generator import (
     generate_contact_docx,
     update_contact_content,
@@ -489,7 +490,7 @@ class WorkflowTests(unittest.TestCase):
                     context, {"requirement_content": "字" * 4001}
                 )
 
-    def test_scanner_skips_unreadable_file_and_records_warning(self) -> None:
+    def test_scanner_keeps_locked_drawing_visible_without_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             folder = root / "暖通空调-014-2026-08-26_关于空调的事宜"
@@ -498,13 +499,13 @@ class WorkflowTests(unittest.TestCase):
             make_docx(word)
             pdf = folder / "需求工作联系单（暖通空调-014）_关于空调的事宜.pdf"
             pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
-            backup = folder / "A21_002-B2层平面图-A0+1_BIAD.bak"
-            backup.write_bytes(b"locked backup")
+            drawing = folder / "A21_002-B2层平面图-A0+1_BIAD.dwg"
+            drawing.write_bytes(b"locked drawing")
 
             def hash_or_deny(path: Path) -> str:
-                if path == backup:
+                if path == drawing:
                     raise PermissionError(13, "Permission denied", str(path))
-                return "test-hash"
+                return sha256_file(path)
 
             with patch(
                 "multidocu_collator.modules.scanner.sha256_file",
@@ -515,16 +516,22 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(len(records), 1)
             self.assertEqual(unmatched, [])
             self.assertEqual(ignored, [])
-            self.assertNotIn(
-                backup.name,
-                {item["name"] for item in records[0]["files"]},
-            )
+            item = next(item for item in records[0]["files"] if item["name"] == drawing.name)
+            self.assertEqual(item["role"], "drawing_source")
+            self.assertIsNone(item["sha256"])
             self.assertTrue(
                 any(
-                    backup.name in warning and "没有读取权限" in warning
+                    drawing.name in warning and "哈希未校验" in warning
                     for warning in records[0]["warnings"]
                 )
             )
+            data, _, _ = build_dataset(
+                root=root, records=records, unmatched_files=unmatched,
+                ignored_files=ignored, previous=None,
+            )
+            validation = validate_dataset(data, root)
+            self.assertEqual(validation["errors"], [])
+            self.assertTrue(any(drawing.name in warning for warning in validation["warnings"]))
 
     def test_updates_print_status_and_rejects_stale_page(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
