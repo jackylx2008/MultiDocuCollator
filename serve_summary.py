@@ -1,8 +1,8 @@
-"""酒店需求工作联系单本地 HTML 汇总服务。
+"""酒店需求单和主体工作联系单的本地汇总服务。
 
 用途：
-  启动时先扫描实际资料目录并重建 JSON/HTML，再在 127.0.0.1 的动态端口打开正式
-  HTML 汇总。点击“主题”链接时，由服务根据
+  启动时先扫描实际资料目录并重建 JSON/HTML，在 127.0.0.1 的动态端口启动服务，
+  然后由控制窗口选择要打开的 HTML 汇总。点击“主题”链接时，由服务根据
   当前系统的 CloudStation 根目录定位资料，并使用 Finder、Windows 资源管理器
   或 Linux 默认文件管理器打开对应目录。汇总表末行还可提交新联系单，服务使用
   同级 DOCX 模板创建文档并通过 Microsoft Word 导出 PDF，随后刷新 JSON/HTML；
@@ -15,14 +15,14 @@
 
 可选参数：
   --data-root   临时覆盖资料根目录。
-  --no-browser  启动服务但不自动打开浏览器。
+  启动后在控制窗口选择要打开的工作流。
 
 示例：
   python serve_summary.py
 
 输出：
-  源码模式在控制台显示本地访问地址，按 Ctrl+C 停止服务；Windows EXE 显示服务
-  控制窗口，可选择“酒店需求单”或“主体工作联系单”，也可停止服务。仅在用户点击末行“保存”时创建新资料目录并
+  Python 源码和 Windows EXE 都显示控制窗口，可选择“酒店需求单”或
+  “主体工作联系单”，也可停止服务。仅在用户点击酒店页面末行“保存”时创建新资料目录并
   更新 JSON/HTML；点击记录删除按钮时，只把既有资料目录移动到同级 _trash 并刷新
   成果，不执行永久删除。
 """
@@ -60,7 +60,6 @@ from multidocu_collator.flows.work_contact_flow import (
 from multidocu_collator.flows.summary_server_flow import (
     _open_summary_browser,
     create_summary_server,
-    run_summary_server,
 )
 
 
@@ -164,7 +163,7 @@ def main() -> int:
     )
     parser.add_argument("--data-root", help="覆盖配置中的资料根目录")
     parser.add_argument("--work-contact-root", help="覆盖主体工作联系单资料目录")
-    parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    parser.add_argument("--no-browser", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     settings = load_settings(PROJECT_ROOT)
     setup_logger(settings["log_level"])
@@ -192,10 +191,7 @@ def main() -> int:
             logging.getLogger(__name__).warning(
                 "主体工作联系单目录不存在，已跳过该工作流: %s", context.work_contact_root
             )
-        if getattr(sys, "frozen", False):
-            _run_control_window(context)
-        else:
-            run_summary_server(context, open_browser=not args.no_browser)
+        _run_control_window(context)
     except Exception as exc:
         logging.getLogger(__name__).exception("本地汇总服务启动失败")
         _show_startup_error(f"本地汇总服务启动失败：{exc}")

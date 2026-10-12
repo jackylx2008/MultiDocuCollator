@@ -145,9 +145,6 @@ HTML_TEMPLATE = r'''<!doctype html>
     header { padding:24px 28px 18px; color:white; background:linear-gradient(120deg,var(--navy),var(--blue)); }
     h1 { margin:0 0 8px; font-size:26px; }
     #subtitle { margin:0; opacity:.86; font-size:14px; }
-    .workflow-nav { display:flex; gap:8px; margin-top:16px; }
-    .workflow-nav a { padding:8px 14px; border:1px solid #ffffff80; border-radius:7px; color:white; text-decoration:none; }
-    .workflow-nav a[aria-current="page"] { background:#ffffff2b; font-weight:700; }
     main { padding:18px 22px 28px; }
     .metrics { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:12px; margin-bottom:14px; }
     .metric { position:relative; padding:13px 16px; border:1px solid var(--line); border-radius:10px; background:white; box-shadow:0 2px 9px #17324d0c; }
@@ -279,7 +276,7 @@ HTML_TEMPLATE = r'''<!doctype html>
   </style>
 </head>
 <body>
-  <header><h1>酒店需求工作联系单汇总</h1><p id="subtitle"></p><nav class="workflow-nav" aria-label="工作流"><a href="./酒店需求工作联系单汇总.html" aria-current="page">酒店需求单</a><a id="workContactLink" href="../02 备忘录/主体工作联系单/主体工作联系单汇总.html">主体工作联系单</a></nav></header>
+  <header><h1>酒店需求工作联系单汇总</h1><p id="subtitle"></p></header>
   <main>
     <section class="metrics">
       <div class="metric">联系单总数<b id="total"></b></div>
@@ -579,7 +576,6 @@ HTML_TEMPLATE = r'''<!doctype html>
     }
     function scheduleInitialScroll(){[0,120,400].forEach(delay=>setTimeout(()=>requestAnimationFrame(scrollToNewEntry),delay))}
     if('scrollRestoration' in history)history.scrollRestoration='manual';
-    if(isLocalService())$('workContactLink').href='/work-contact/';
     ['search','disciplineFilter','printFilter','changeRequiredFilter','siteCompletedFilter','statusFilter'].forEach(id=>$(id).addEventListener(id==='search'?'input':'change',render));render();scheduleInitialScroll();window.addEventListener('load',scheduleInitialScroll,{once:true});window.addEventListener('pageshow',scheduleInitialScroll,{once:true});checkLocalAi();
   </script>
 </body>
