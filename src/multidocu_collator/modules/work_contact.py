@@ -15,6 +15,7 @@ from .file_utils import relative_posix, sha256_file
 
 DOCUMENT_NAME = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})_工作联系单_(?P<subject>.+)\.docx$")
 TEMPLATE_NAME = "主体工作联系单模板.docx"
+WRITING_SKILL_NAME = "2026-05-09_工作联系单_skills_已更新.md"
 TEMPLATE_NAMES = {
     "质保": "质保工作联系单模板.docx",
     "维保": "维保工作联系单模板.docx",
@@ -208,7 +209,7 @@ def scan_work_contacts(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
         )
         and path.name not in {
             "主体工作联系单数据.json", "主体工作联系单汇总.html", TEMPLATE_NAME,
-            *TEMPLATE_NAMES.values(),
+            WRITING_SKILL_NAME, *TEMPLATE_NAMES.values(),
         }
         and not path.name.startswith("~$")
     ]

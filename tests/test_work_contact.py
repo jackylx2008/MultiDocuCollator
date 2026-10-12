@@ -36,7 +36,8 @@ from multidocu_collator.flows.work_contact_mutation import (
     update_work_contact,
 )
 from multidocu_collator.modules.summary_html import export_summary_html
-from multidocu_collator.modules.work_contact import scan_work_contacts
+from multidocu_collator.modules.work_contact import WRITING_SKILL_NAME, scan_work_contacts
+from multidocu_collator.modules.work_contact_ai import generate_work_contact_draft
 from multidocu_collator.modules.work_contact_document import write_work_contact_docx
 
 
@@ -63,6 +64,61 @@ STRUCTURAL_TEMPLATE_XML = '''<w:document xmlns:w="http://schemas.openxmlformats.
 
 
 class WorkContactTests(unittest.TestCase):
+    def test_ai_draft_reads_current_writing_rules_and_only_returns_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill = root / WRITING_SKILL_NAME
+            skill.write_text("按事实、影响、要求撰写。", encoding="utf-8")
+            context = AppContext(root, root, "hotel.json", "hotel.html", work_contact_root=root,
+                                 local_ai_model="test-model")
+            response = {"choices": [{"message": {"content": json.dumps({
+                "recipient": "施工单位", "subject": "事由：关于设备维修事宜",
+                "content": "内容：设备故障。\n请落实维修。\n以下空白",
+                "missing_information": ["请核对整改时限"],
+            }, ensure_ascii=False)}}]}
+            payload = {"facts": "设备故障，请落实维修。", "discipline": "质保",
+                       "folder_date": "2026-10-12"}
+            with (
+                patch("multidocu_collator.modules.work_contact_ai._healthcheck", return_value=["test-model"]),
+                patch("multidocu_collator.modules.work_contact_ai._request_json", return_value=response) as request,
+            ):
+                first = generate_work_contact_draft(root, payload, context=context, system_name="Windows")
+                self.assertIn("按事实、影响、要求撰写。", request.call_args.kwargs["payload"]["messages"][0]["content"])
+                skill.write_text("更新规则：只写问题和要求。", encoding="utf-8")
+                second = generate_work_contact_draft(root, payload, context=context, system_name="Windows")
+                self.assertIn("更新规则：只写问题和要求。", request.call_args.kwargs["payload"]["messages"][0]["content"])
+            self.assertEqual(first["subject"], "关于设备维修事宜")
+            self.assertEqual(first["content"], "设备故障。\n请落实维修。")
+            self.assertEqual(first["missing_information"], ["请核对整改时限"])
+            self.assertNotEqual(first["skill_sha256"], second["skill_sha256"])
+            self.assertEqual([path.name for path in root.iterdir()], [WRITING_SKILL_NAME])
+
+    def test_ai_draft_retries_fabricated_inspection_and_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / WRITING_SKILL_NAME).write_text("只写事实和要求。", encoding="utf-8")
+            context = AppContext(root, root, "hotel.json", "hotel.html", work_contact_root=root,
+                                 local_ai_model="test-model")
+            def response(content: str) -> dict:
+                return {"choices": [{"message": {"content": json.dumps({
+                    "recipient": "", "subject": "关于排水泵维修事宜",
+                    "content": content, "missing_information": [],
+                }, ensure_ascii=False)}}]}
+            with (
+                patch("multidocu_collator.modules.work_contact_ai._healthcheck", return_value=["test-model"]),
+                patch("multidocu_collator.modules.work_contact_ai._request_json", side_effect=[
+                    response("经现场核查发现泵故障。请于2026年10月20日前完成。"),
+                    response("排水泵运行异常。请排查维修，并反馈完成时间。"),
+                ]) as request,
+            ):
+                result = generate_work_contact_draft(root, {
+                    "facts": "排水泵运行异常，只写问题和要求。", "folder_date": "2026-10-12",
+                }, context=context, system_name="Windows")
+            self.assertEqual(request.call_count, 2)
+            self.assertIn("踏勘或检查过程", request.call_args.kwargs["payload"]["messages"][-1]["content"])
+            self.assertEqual(result["content"], "排水泵运行异常。请排查维修，并反馈完成时间。")
+            self.assertIn("致送单位", result["missing_information"])
+
     def test_rewrite_preserves_namespaces_and_handles_repeated_body_label(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -261,6 +317,7 @@ class WorkContactTests(unittest.TestCase):
                 archive.writestr("word/document.xml", DOCUMENT_XML)
             (root / f"{word.stem}_扫描件.pdf").write_bytes(b"%PDF-1.4\n")
             (root / "其他文件.txt").write_text("unmatched", encoding="utf-8")
+            (root / WRITING_SKILL_NAME).write_text("写作规则", encoding="utf-8")
 
             records, unmatched = scan_work_contacts(root)
             self.assertEqual(len(records), 1)
@@ -274,7 +331,9 @@ class WorkContactTests(unittest.TestCase):
             self.assertFalse(build_work_contact_archive(root)["changed"])
             data = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
             self.assertEqual(data["dataset_revision"], 1)
+            self.assertTrue(data["writing_skill_available"])
             html = (root / "主体工作联系单汇总.html").read_text(encoding="utf-8")
+            self.assertIn("按写作规则生成草稿", html)
             self.assertIn("按状态筛选", html)
             self.assertIn("/api/proofread-work-contact", html)
             self.assertIn("AI 公文修订对照", html)
@@ -415,6 +474,18 @@ class WorkContactTests(unittest.TestCase):
                 proofreader.assert_called_once_with(
                     "原始正文", context=context, content_label="工作联系单正文"
                 )
+                draft_payload = {"facts": "设备故障", "folder_date": "2026-10-12"}
+                draft_request = urllib.request.Request(
+                    url + "api/generate-work-contact",
+                    data=json.dumps(draft_payload, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with patch(
+                    "multidocu_collator.flows.summary_server_flow.generate_work_contact_draft",
+                    return_value={"subject": "设备维修", "content": "请维修。"},
+                ) as generator:
+                    self.assertEqual(json.load(urllib.request.urlopen(draft_request))["subject"], "设备维修")
+                generator.assert_called_once_with(work, draft_payload, context=context)
                 with self.assertRaises(urllib.error.HTTPError):
                     urllib.request.urlopen(url + "work-contact/%2e%2e/hotel/hotel.html")
             finally:

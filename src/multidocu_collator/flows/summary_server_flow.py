@@ -27,6 +27,7 @@ from ..modules.local_ai import (
     local_ai_status,
     proofread_official_content,
 )
+from ..modules.work_contact_ai import generate_work_contact_draft
 from .build_archive_flow import run_build_archive
 from .create_record_flow import create_record
 from .delete_record_flow import delete_record
@@ -167,6 +168,7 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 "/api/update-record-content",
                 "/api/proofread-content",
                 "/api/proofread-work-contact",
+                "/api/generate-work-contact",
             }:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
@@ -189,6 +191,14 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     with RECORD_MUTATION_LOCK:
                         result = build_work_contact_archive(work_root)
                     self._send_json(HTTPStatus.OK, result)
+                    return
+                if route == "/api/generate-work-contact":
+                    if work_root is None:
+                        raise FileNotFoundError("主体工作联系单目录未配置")
+                    self._send_json(
+                        HTTPStatus.OK,
+                        generate_work_contact_draft(work_root, payload, context=context),
+                    )
                     return
                 if route in {
                     "/api/create-work-contact",
