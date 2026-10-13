@@ -14,6 +14,7 @@ from uuid import uuid4
 from pypdf import PdfReader
 
 from ..modules.desktop import resolve_relative_directory, resolve_relative_file
+from ..modules.file_utils import sha256_file
 from ..modules.pdf_exporter import export_pdf_with_word, replace_pdf_first_page
 from ..modules.work_contact_attachment import write_attachment_docx
 from ..modules.work_contact_document import write_work_contact_docx
@@ -245,6 +246,14 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         )
         if not changed:
             return {"ok": True, "changed": False, "dataset_revision": data["dataset_revision"]}
+        for item in record.get("files") or []:
+            if item.get("role") not in {
+                "source_word", "issued_pdf", "signed_scan", "attachment_word", "attachment_pdf",
+            }:
+                continue
+            path = resolve_relative_file(root, str(item.get("path") or ""))
+            if sha256_file(path) != item.get("sha256"):
+                raise ValueError(f"资料文件已在外部修改，请先重新扫描刷新：{path.name}")
         word_item = next(
             (item for item in record.get("files") or [] if item.get("role") == "source_word"),
             None,

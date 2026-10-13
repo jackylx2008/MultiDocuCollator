@@ -365,6 +365,31 @@ class WorkContactTests(unittest.TestCase):
             refreshed = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))["records"][0]
             self.assertTrue(refreshed["temporary_number"])
             self.assertEqual(refreshed["original_document_no"], "质保—")
+
+    def test_update_rejects_word_changed_after_last_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            folder = root / "质保-024-2026-10-12_设备维修"
+            folder.mkdir()
+            word = folder / "工作联系单（质保-024）_设备维修.docx"
+            with ZipFile(word, "w") as archive:
+                archive.writestr("word/document.xml", STRUCTURAL_TEMPLATE_XML)
+            build_work_contact_archive(root)
+            data = json.loads((root / "主体工作联系单数据.json").read_text(encoding="utf-8"))
+            record = data["records"][0]
+            revised_xml = STRUCTURAL_TEMPLATE_XML.replace("原始正文。", "人工改写正文。")
+            with ZipFile(word, "w") as archive:
+                archive.writestr("word/document.xml", revised_xml)
+            with self.assertRaisesRegex(ValueError, "资料文件已在外部修改，请先重新扫描刷新"):
+                update_work_contact(root, {
+                    "dataset_revision": data["dataset_revision"], "record_id": record["record_id"],
+                    "number_mode": "keep", "folder_date": record["folder_date"],
+                    "recipient": record["致送单位"], "subject": "设备维修更新",
+                    "content": record["内容"],
+                })
+            with ZipFile(word) as archive:
+                self.assertIn("人工改写正文。", archive.read("word/document.xml").decode("utf-8"))
+
     def test_ai_draft_reads_current_writing_rules_and_only_returns_preview(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
