@@ -66,6 +66,18 @@ STRUCTURAL_TEMPLATE_XML = '''<w:document xmlns:w="http://schemas.openxmlformats.
 
 
 class WorkContactTests(unittest.TestCase):
+    def test_same_day_contacts_follow_sequence_instead_of_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for code, subject in (("质保-023", "消防整改"), ("质保-024", "排水泵整改")):
+                folder = root / f"{code}-2026-10-12_{subject}"
+                folder.mkdir()
+                with ZipFile(folder / f"工作联系单（{code}）_{subject}.docx", "w") as archive:
+                    archive.writestr("word/document.xml", STRUCTURAL_TEMPLATE_XML)
+            records, _ = scan_work_contacts(root)
+            self.assertEqual([record["document_code"] for record in records],
+                             ["质保-023", "质保-024"])
+
     def test_ai_split_previews_body_and_preserves_existing_attachment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

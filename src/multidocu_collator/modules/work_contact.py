@@ -229,7 +229,12 @@ def scan_work_contacts(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
             ),
             "warnings": warnings,
         })
-    records.sort(key=lambda row: (row["folder_date"], row["subject"]))
+    records.sort(key=lambda row: (
+        row["folder_date"],
+        str(row.get("discipline") or ""),
+        int(str(row.get("sequence_no") or "0")) if str(row.get("sequence_no") or "0").isdigit() else 0,
+        row["subject"],
+    ))
     unmatched = [
         path.relative_to(root).as_posix()
         for path in sorted(root.rglob("*"), key=lambda item: item.as_posix())
