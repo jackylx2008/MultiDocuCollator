@@ -65,7 +65,10 @@ from multidocu_collator.flows.summary_server_flow import (
 
 def _bundled_icon_path() -> Path:
     bundle_root = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
-    return bundle_root / "serve_summary.ico"
+    bundled_icon = bundle_root / "serve_summary.ico"
+    if bundled_icon.is_file():
+        return bundled_icon
+    return PROJECT_ROOT / "assets" / "serve_summary.ico"
 
 
 def _run_control_window(context: AppContext) -> None:

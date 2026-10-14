@@ -6,7 +6,8 @@ HTML 汇总。通过本地服务打开 HTML 时，还可在固定末行填写新
 “消防水-004”固化模板生成 DOCX，并调用 Microsoft Word 导出 PDF。既有 Word、
 PDF、图片、DWG 及其他资料不会被移动、改名或删除。
 
-最新更新说明见 [2026-10-13：主体工作联系单更新](docs/UPDATE_2026-10-13.md)。
+最新更新说明见 [2026-10-14：应用图标与 Windows EXE 交付](docs/UPDATE_2026-10-14.md)。
+工作流说明见 [2026-10-13：主体工作联系单更新](docs/UPDATE_2026-10-13.md)；
 此前的酒店汇总页更新见 [2026-09-25：人工状态筛选](docs/UPDATE_2026-09-25.md)。
 
 ## 主体工作联系单工作流
@@ -168,8 +169,9 @@ Windows PowerShell 将第一条命令替换为：
 Windows 可直接双击项目根目录的 `build_archive.cmd`：脚本会先更新 JSON/HTML，
 构建成功后继续启动 `serve_summary.py` 并显示工作流选择窗口。
 
-也可以双击项目根目录生成的 `酒店需求工作联系单汇总.exe`。EXE 会读取其同目录的
-`config.yaml`、`.env` 或 `common.env`，并将运行日志写入同目录的 `logs/`。重新构建
+也可以双击 `build/delivery/酒店需求工作联系单汇总.exe`。交付目录还包含
+`config.yaml` 和 `common.env.example`；如需覆盖本机配置，可在交付目录新建 `.env`
+或 `common.env`。EXE 会读取同目录的配置，并将运行日志写入同目录的 `logs/`。重新构建
 EXE 前安装构建依赖，然后运行打包脚本：
 
 ```powershell
@@ -178,9 +180,10 @@ python -m venv .build-venv
 .\build_serve_summary_exe.ps1
 ```
 
-程序图标源文件和 Windows ICO 位于 `assets/`。Python 源码和无控制台 EXE
-启动后均显示同一个服务控制窗口；点击“酒店需求单”或“主体工作联系单”进入对应
-页面，也可点击“停止服务”退出。主体资料目录不存在时，其入口会置灰。关闭控制
+程序图标的可编辑 SVG 源文件、PNG 和 Windows ICO 位于 `assets/`；修改 SVG 后可运行
+`python assets/build_icon.py` 重新生成 PNG 和 ICO（需安装 CairoSVG 和 Pillow）。
+Python 源码和无控制台 EXE 启动后均显示同一个服务控制窗口；点击“酒店需求单”或
+“主体工作联系单”进入对应页面，也可点击“停止服务”退出。主体资料目录不存在时，其入口会置灰。关闭控制
 窗口也会正常释放本地端口并退出进程。
 
 ## 迁移存档
@@ -452,13 +455,14 @@ python -m compileall -q build_archive.py serve_summary.py validate_archive.py lo
 
 ## GitHub 同步
 
-GitHub 使用 SSH remote。提交前必须检查忽略文件，确保 `.env`、`common.env`、日志、缓存、
-虚拟环境和真实业务资料未进入版本库：
+GitHub 使用 SSH remote。提交前检查忽略文件，确保 `.env`、`common.env`、
+`build/delivery/` 中的 EXE、日志、缓存、虚拟环境和真实业务资料未进入版本库。
+推送当前分支：
 
 ```bash
 git status --short --ignored
 git diff --check
-git push origin main
+git push origin HEAD
 ```
 
 ## 项目结构
@@ -473,7 +477,8 @@ logging_config.py                统一控制台及滚动文件日志
 requirements.txt                Python 运行依赖（PDF 页面合并）
 requirements-build.txt          Windows EXE 构建依赖
 build_serve_summary_exe.ps1     生成带项目图标的单文件 Windows EXE
-assets/                         应用图标 PNG/ICO
+assets/                         应用图标 SVG/PNG/ICO 与生成脚本
+build/delivery/                 Windows EXE 交付目录（不入库）
 src/multidocu_collator/modules/  DOCX 解析/生成、Word PDF、扫描、HTML、校验
 src/multidocu_collator/flows/    扫描建库、新增联系单及服务编排
 tests/                           单元和集成测试

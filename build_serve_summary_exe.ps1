@@ -21,6 +21,8 @@ if ($LASTEXITCODE -ne 0) {
 $appName = "酒店需求工作联系单汇总"
 $iconPath = Join-Path $projectRoot "assets\serve_summary.ico"
 $sourcePath = Join-Path $projectRoot "src"
+$deliveryDir = Join-Path $projectRoot "build\delivery"
+New-Item -ItemType Directory -Path $deliveryDir -Force | Out-Null
 & $python -m PyInstaller `
     --onefile `
     --windowed `
@@ -30,7 +32,7 @@ $sourcePath = Join-Path $projectRoot "src"
     --icon $iconPath `
     --add-data "$iconPath;." `
     --paths $sourcePath `
-    --distpath $projectRoot `
+    --distpath $deliveryDir `
     --workpath "build\serve_summary" `
     --specpath "build" `
     "serve_summary.py"
@@ -39,9 +41,12 @@ if ($LASTEXITCODE -ne 0) {
     throw "EXE 构建失败，退出代码: $LASTEXITCODE"
 }
 
-$output = Join-Path $projectRoot "$appName.exe"
+$output = Join-Path $deliveryDir "$appName.exe"
 if (-not (Test-Path -LiteralPath $output)) {
     throw "构建完成但未找到输出文件: $output"
 }
+
+Copy-Item -LiteralPath (Join-Path $projectRoot "config.yaml") -Destination $deliveryDir -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot "common.env.example") -Destination $deliveryDir -Force
 
 Write-Host "构建完成: $output"
