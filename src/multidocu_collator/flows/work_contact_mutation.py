@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pypdf import PdfReader
-
 from ..modules.desktop import resolve_relative_directory, resolve_relative_file
 from ..modules.file_utils import sha256_file
-from ..modules.pdf_exporter import export_pdf_with_word, replace_pdf_first_page
-from ..modules.work_contact_attachment import write_attachment_docx
+from ..modules.pdf_exporter import assemble_work_contact_pdf, export_pdf_with_word
+from ..modules.work_contact_attachment import (
+    METADATA_NAME, read_attachment_metadata, write_attachment_docx,
+    write_attachment_metadata,
+)
 from ..modules.work_contact_document import write_work_contact_docx
 from ..modules.work_contact import TEMPLATE_NAME, TEMPLATE_NAMES
 from .create_record_flow import _clean_component
@@ -148,15 +149,24 @@ def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
                 subject=values["subject"],
                 content=values["content"],
             )
-            export_pdf_with_word(word, pdf)
+            generated_pdf = staging / f".{base}.generated.pdf"
+            export_pdf_with_word(word, generated_pdf)
             if values["attachment_content"]:
                 attachment_base = _attachment_name(code, values["subject"])
                 attachment_word = staging / f"{attachment_base}.docx"
+                attachment_pdf = staging / f"{attachment_base}.pdf"
                 write_attachment_docx(
                     attachment_word, subject=values["subject"],
                     content=values["attachment_content"],
                 )
-                export_pdf_with_word(attachment_word, staging / f"{attachment_base}.pdf")
+                export_pdf_with_word(attachment_word, attachment_pdf)
+                pages = assemble_work_contact_pdf(generated_pdf, pdf, attachment=attachment_pdf)
+                write_attachment_metadata(staging, values["attachment_content"], pages)
+                attachment_word.unlink()
+                attachment_pdf.unlink()
+                generated_pdf.unlink()
+            else:
+                generated_pdf.replace(pdf)
             staging.replace(final)
             try:
                 build_work_contact_archive(root)
@@ -276,6 +286,7 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         source_pdf = (
             resolve_relative_file(root, str(source_pdf_item["path"])) if source_pdf_item else None
         )
+        previous_metadata = read_attachment_metadata(source_dir)
         if source_pdf and source_pdf.parent != source_dir:
             raise ValueError("PDF 文件不在联系单一级目录")
         trash = root / "_trash"
@@ -303,11 +314,6 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         )
         generated_pdf = staging / f".{base_name}.generated.pdf"
         export_pdf_with_word(new_word, generated_pdf)
-        if source_pdf and len(PdfReader(source_pdf).pages) > 1:
-            replace_pdf_first_page(source_pdf, generated_pdf, new_pdf)
-            generated_pdf.unlink()
-        else:
-            generated_pdf.replace(new_pdf)
         if source_word.name != new_word.name:
             (staging / source_word.name).unlink()
         if issued_item and source_pdf and source_pdf.name != new_pdf.name:
@@ -326,11 +332,27 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         if values["attachment_content"]:
             attachment_base = _attachment_name(code, values["subject"])
             attachment_word = staging / f"{attachment_base}.docx"
+            attachment_pdf = staging / f"{attachment_base}.pdf"
             write_attachment_docx(
                 attachment_word, subject=values["subject"],
                 content=values["attachment_content"],
             )
-            export_pdf_with_word(attachment_word, staging / f"{attachment_base}.pdf")
+            export_pdf_with_word(attachment_word, attachment_pdf)
+        else:
+            attachment_word = attachment_pdf = None
+        pages = assemble_work_contact_pdf(
+            generated_pdf, new_pdf, attachment=attachment_pdf, previous=source_pdf,
+            previous_attachment_pages=(
+                previous_metadata[1] if previous_metadata and issued_item else 0
+            ),
+        )
+        generated_pdf.unlink()
+        if attachment_word and attachment_pdf:
+            write_attachment_metadata(staging, values["attachment_content"], pages)
+            attachment_word.unlink()
+            attachment_pdf.unlink()
+        else:
+            (staging / METADATA_NAME).unlink(missing_ok=True)
         source_dir.replace(snapshot)
         try:
             for name in (JSON_NAME, "主体工作联系单汇总.html"):

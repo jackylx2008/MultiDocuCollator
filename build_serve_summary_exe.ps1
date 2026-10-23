@@ -48,5 +48,11 @@ if (-not (Test-Path -LiteralPath $output)) {
 
 Copy-Item -LiteralPath (Join-Path $projectRoot "config.yaml") -Destination $deliveryDir -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot "common.env.example") -Destination $deliveryDir -Force
+foreach ($envName in @(".env", "common.env")) {
+    $envSource = Join-Path $projectRoot $envName
+    if (Test-Path -LiteralPath $envSource -PathType Leaf) {
+        Copy-Item -LiteralPath $envSource -Destination $deliveryDir -Force
+    }
+}
 
 Write-Host "构建完成: $output"

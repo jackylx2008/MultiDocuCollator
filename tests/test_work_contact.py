@@ -38,7 +38,7 @@ from multidocu_collator.flows.work_contact_mutation import (
 from multidocu_collator.modules.summary_html import export_summary_html
 from multidocu_collator.modules.docx_parser import parse_docx
 from multidocu_collator.modules.work_contact import WRITING_SKILL_NAME, scan_work_contacts
-from multidocu_collator.modules.work_contact_attachment import read_attachment_docx
+from multidocu_collator.modules.work_contact_attachment import read_attachment_metadata
 from multidocu_collator.modules.work_contact_ai import generate_work_contact_draft, split_work_contact_content
 from multidocu_collator.modules.work_contact_document import write_work_contact_docx
 
@@ -127,7 +127,7 @@ class WorkContactTests(unittest.TestCase):
             self.assertEqual(request.call_count, 2)
             self.assertEqual(result["attachment_content"], "1. 排水泵无法启动，请修复。")
 
-    def test_attachment_word_and_pdf_follow_record_edits(self) -> None:
+    def test_generated_attachment_is_merged_and_replaced_on_edits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             with ZipFile(root / TEMPLATE_NAME, "w") as archive:
@@ -136,7 +136,8 @@ class WorkContactTests(unittest.TestCase):
 
             def fake_pdf(_word: Path, pdf: Path) -> Path:
                 writer = PdfWriter()
-                writer.add_blank_page(width=595, height=842)
+                for width in ([400, 410] if _word.name.startswith("附件（") else [595]):
+                    writer.add_blank_page(width=width, height=842)
                 with pdf.open("wb") as stream:
                     writer.write(stream)
                 return pdf
@@ -154,11 +155,19 @@ class WorkContactTests(unittest.TestCase):
                 record = dataset()["records"][0]
                 self.assertEqual(record["附件内容"], details)
                 self.assertEqual({item["role"] for item in record["files"]},
-                                 {"source_word", "issued_pdf", "attachment_word", "attachment_pdf"})
-                attachment = root / next(item["path"] for item in record["files"] if item["role"] == "attachment_word")
-                self.assertEqual(read_attachment_docx(attachment), details)
-                unrelated_pdf = attachment.parent / "附加说明.pdf"
-                fake_pdf(attachment, unrelated_pdf)
+                                 {"source_word", "issued_pdf"})
+                folder = root / record["folder_path"]
+                issued = root / next(item["path"] for item in record["files"] if item["role"] == "issued_pdf")
+                self.assertEqual([float(page.mediabox.width) for page in PdfReader(issued).pages], [595, 400, 410])
+                self.assertEqual(read_attachment_metadata(folder), (details, 2))
+                self.assertFalse(list(folder.glob("附件（*")))
+                writer = PdfWriter()
+                writer.append(str(issued))
+                writer.add_blank_page(width=500, height=842)
+                with issued.open("wb") as stream:
+                    writer.write(stream)
+                unrelated_pdf = folder / "附加说明.pdf"
+                fake_pdf(folder / "unrelated.docx", unrelated_pdf)
                 build_work_contact_archive(root)
                 revised = details + "\n3. 控制柜报警，请核查。"
                 update_work_contact(root, {**base, "attachment_content": revised,
@@ -166,6 +175,8 @@ class WorkContactTests(unittest.TestCase):
                                            "record_id": record["record_id"], "number_mode": "keep"})
                 record = dataset()["records"][0]
                 self.assertEqual(record["附件内容"], revised)
+                issued = root / next(item["path"] for item in record["files"] if item["role"] == "issued_pdf")
+                self.assertEqual([float(page.mediabox.width) for page in PdfReader(issued).pages], [595, 400, 410, 500])
                 self.assertTrue(unrelated_pdf.is_file())
                 inline_values = {key: value for key, value in base.items() if key != "attachment_content"}
                 update_work_contact(root, {**inline_values, "content": "请按附件逐项整改并反馈。",
@@ -173,6 +184,8 @@ class WorkContactTests(unittest.TestCase):
                                            "record_id": record["record_id"], "number_mode": "keep"})
                 record = dataset()["records"][0]
                 self.assertEqual(record["附件内容"], revised)
+                issued = root / next(item["path"] for item in record["files"] if item["role"] == "issued_pdf")
+                self.assertEqual(len(PdfReader(issued).pages), 4)
                 update_work_contact(root, {**base, "attachment_content": "",
                                            "dataset_revision": dataset()["dataset_revision"],
                                            "record_id": record["record_id"], "number_mode": "keep"})
@@ -180,6 +193,9 @@ class WorkContactTests(unittest.TestCase):
                 self.assertEqual(record["附件内容"], "")
                 self.assertEqual({item["role"] for item in record["files"]},
                                  {"source_word", "issued_pdf", "attachment_pdf"})
+                issued = root / next(item["path"] for item in record["files"] if item["role"] == "issued_pdf")
+                self.assertEqual([float(page.mediabox.width) for page in PdfReader(issued).pages], [595, 500])
+                self.assertIsNone(read_attachment_metadata(root / record["folder_path"]))
                 self.assertTrue(unrelated_pdf.is_file())
 
     def test_new_contact_preserves_blank_lines_in_body(self) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from docx import Document
@@ -11,6 +12,27 @@ from docx.shared import Cm, Pt, RGBColor
 
 
 TITLE = "附件：具体问题及整改要求"
+METADATA_NAME = ".work_contact_attachment.json"
+
+
+def read_attachment_metadata(directory: Path) -> tuple[str, int] | None:
+    path = directory / METADATA_NAME
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    content, pages = data.get("content"), data.get("pages")
+    if not isinstance(content, str) or not isinstance(pages, int) or pages < 1:
+        raise ValueError("附件元数据格式不正确")
+    return content, pages
+
+
+def write_attachment_metadata(directory: Path, content: str, pages: int) -> None:
+    if not content or pages < 1:
+        raise ValueError("附件元数据内容或页数无效")
+    (directory / METADATA_NAME).write_text(
+        json.dumps({"content": content, "pages": pages}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def write_attachment_docx(output: Path, *, subject: str, content: str) -> Path:

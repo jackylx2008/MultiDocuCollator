@@ -106,6 +106,49 @@ def replace_pdf_first_page(original: Path, replacement: Path, output: Path) -> P
         raise
 
 
+def assemble_work_contact_pdf(
+    first_page: Path, output: Path, *, attachment: Path | None = None,
+    previous: Path | None = None, previous_attachment_pages: int = 0,
+) -> int:
+    """首页后插入新附件，保留旧 PDF 中其余的人工附件页。"""
+    sources = [first_page]
+    if attachment:
+        sources.append(attachment)
+    if previous:
+        sources.append(previous)
+    if output.resolve() in {path.resolve() for path in sources}:
+        raise ValueError("合并后的 PDF 必须输出到独立文件")
+    try:
+        first_reader = PdfReader(first_page)
+        if first_reader.is_encrypted or len(first_reader.pages) != 1:
+            raise ValueError("新生成的联系单 PDF 必须恰好为一页且未加密")
+        attachment_reader = PdfReader(attachment) if attachment else None
+        if attachment_reader and (attachment_reader.is_encrypted or not attachment_reader.pages):
+            raise ValueError("附件 PDF 无有效页面或已加密")
+        previous_reader = PdfReader(previous) if previous else None
+        if previous_reader and (
+            previous_reader.is_encrypted
+            or previous_attachment_pages > len(previous_reader.pages) - 1
+        ):
+            raise ValueError("原 PDF 的附件页数不正确或已加密")
+        writer = PdfWriter()
+        writer.add_page(first_reader.pages[0])
+        if attachment_reader:
+            for page in attachment_reader.pages:
+                writer.add_page(page)
+        if previous_reader:
+            for page in previous_reader.pages[1 + previous_attachment_pages:]:
+                writer.add_page(page)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("wb") as stream:
+            writer.write(stream)
+        validate_pdf(output)
+        return len(attachment_reader.pages) if attachment_reader else 0
+    except Exception:
+        output.unlink(missing_ok=True)
+        raise
+
+
 def export_pdf_with_word(
     docx: Path, pdf: Path, *, system_name: str | None = None
 ) -> Path:

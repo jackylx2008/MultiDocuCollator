@@ -11,7 +11,7 @@ from zipfile import BadZipFile, ZipFile
 
 from .docx_parser import W, parse_docx
 from .file_utils import relative_posix, sha256_file
-from .work_contact_attachment import read_attachment_docx
+from .work_contact_attachment import METADATA_NAME, read_attachment_docx, read_attachment_metadata
 
 
 DOCUMENT_NAME = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})_工作联系单_(?P<subject>.+)\.docx$")
@@ -91,7 +91,7 @@ def _organized_record(directory: Path, root: Path, match: re.Match[str]) -> dict
     code = f"{match['discipline']}-{match['sequence']}"
     subject = match["subject"]
     base_name = f"工作联系单（{code}）_{subject}"
-    files = sorted((path for path in directory.rglob("*") if path.is_file()), key=lambda p: p.as_posix())
+    files = sorted((path for path in directory.rglob("*") if path.is_file() and path.name != METADATA_NAME), key=lambda p: p.as_posix())
     expected_word = directory / f"{base_name}.docx"
     words = [path for path in files if path.suffix.lower() == ".docx"]
     word = expected_word if expected_word in words else (words[0] if words else None)
@@ -114,7 +114,14 @@ def _organized_record(directory: Path, root: Path, match: re.Match[str]) -> dict
     attachment_words = [
         path for path in words if path != word and path.name.startswith(f"附件（{code}）_")
     ]
-    if attachment_words:
+    try:
+        metadata = read_attachment_metadata(directory)
+    except (OSError, ValueError) as exc:
+        warnings.append(f"附件元数据读取失败：{type(exc).__name__}")
+        metadata = None
+    if metadata:
+        attachment_content = metadata[0]
+    elif attachment_words:
         try:
             attachment_content = read_attachment_docx(attachment_words[0])
         except (OSError, ValueError) as exc:
