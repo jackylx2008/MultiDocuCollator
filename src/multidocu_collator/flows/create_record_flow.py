@@ -110,8 +110,9 @@ def create_record(context: AppContext, payload: dict[str, Any]) -> dict[str, Any
         final_directory = context.data_root / folder_name
         if final_directory.exists():
             raise FileExistsError(f"目标目录已经存在: {folder_name}")
-        if not context.template_path.is_file():
-            raise FileNotFoundError(f"联系单模板不存在: {context.template_path}")
+        template_path = context.template_path_for_date(values["folder_date"])
+        if not template_path.is_file():
+            raise FileNotFoundError(f"联系单模板不存在: {template_path}")
         base_name = f"需求工作联系单（{values['document_code']}）_{values['subject']}"
         with tempfile.TemporaryDirectory(prefix=".new_contact_", dir=context.data_root) as temp:
             staging = Path(temp) / folder_name
@@ -119,7 +120,7 @@ def create_record(context: AppContext, payload: dict[str, Any]) -> dict[str, Any
             docx = staging / f"{base_name}.docx"
             pdf = staging / f"{base_name}.pdf"
             generate_contact_docx(
-                context.template_path,
+                template_path,
                 docx,
                 document_no=values["document_code"],
                 document_date=values["folder_date"],

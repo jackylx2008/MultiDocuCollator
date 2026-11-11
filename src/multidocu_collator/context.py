@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
+import re
 
 
 @dataclass(frozen=True)
@@ -30,3 +32,29 @@ class AppContext:
     @property
     def template_path(self) -> Path:
         return self.data_root / self.template_name
+
+    def template_path_for_date(self, document_date: date) -> Path:
+        """Return the latest dated template effective on the document date."""
+        dated_templates: list[tuple[date, Path]] = []
+        for path in self.data_root.glob("????-??-??_需求工作联系单模板.docx"):
+            match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_需求工作联系单模板\.docx", path.name)
+            if match is None or not path.is_file():
+                continue
+            try:
+                effective_date = date.fromisoformat(match.group(1))
+            except ValueError:
+                continue
+            if effective_date <= document_date:
+                dated_templates.append((effective_date, path))
+        if dated_templates:
+            return max(dated_templates, key=lambda item: item[0])[1]
+        return self.template_path
+
+    @property
+    def template_names(self) -> set[str]:
+        """Names of configured and dated templates to exclude from archive scans."""
+        names = {self.template_name}
+        for path in self.data_root.glob("????-??-??_需求工作联系单模板.docx"):
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}_需求工作联系单模板\.docx", path.name):
+                names.add(path.name)
+        return names

@@ -28,7 +28,7 @@ def run_build_archive(context: AppContext) -> dict[str, Any]:
         generated_names={
             context.json_name,
             context.html_name,
-            context.template_name,
+            *context.template_names,
             TRASH_DIRECTORY_NAME,
         },
     )
