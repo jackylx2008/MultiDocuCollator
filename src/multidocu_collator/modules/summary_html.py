@@ -513,7 +513,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     let sequenceEdited=false,newRow;
     function localDate(){const now=new Date();return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`}
     function suggestedSequence(discipline){
-      const values=data.rows.filter(row=>row.discipline===discipline&&/^\d+$/.test(row.sequence_no)).map(row=>Number(row.sequence_no));
+      const values=data.rows.filter(row=>row.discipline===discipline&&/^\d+[A-Z]?$/.test(row.sequence_no)).map(row=>Number.parseInt(row.sequence_no,10));
       return String((values.length?Math.max(...values):0)+1).padStart(3,'0');
     }
     function field(tag,name,placeholder,type){const el=document.createElement(tag);el.name=name;el.placeholder=placeholder||'';if(type)el.type=type;return el}

@@ -13,7 +13,7 @@ from .file_utils import relative_posix, sha256_file
 
 
 FOLDER_PATTERN = re.compile(
-    r"^(?P<discipline>.+)-(?P<sequence>\d+)-"
+    r"^(?P<discipline>.+)-(?P<sequence>\d+[A-Z]?)-"
     r"(?P<date>\d{4}-\d{2}-\d{2})_(?P<subject>.+)$"
 )
 IGNORED_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
@@ -119,9 +119,16 @@ def _record(directory: Path, root: Path, match: re.Match[str]) -> dict[str, Any]
                 f"（{type(exc).__name__}）"
             )
     if word.document_no and word.document_no != expected_code:
-        warnings.append(
-            f"资料编号不一致：目录为“{expected_code}”，Word 为“{word.document_no}”"
-        )
+        if sequence[-1] in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" and (
+            word.document_no == f"{discipline}-{sequence[:-1]}"
+        ):
+            warnings.append(
+                f"归档编号为“{expected_code}”，已下发原件编号为“{word.document_no}”"
+            )
+        else:
+            warnings.append(
+                f"资料编号不一致：目录为“{expected_code}”，Word 为“{word.document_no}”"
+            )
     if word.document_date and word.document_date != folder_date:
         warnings.append(
             f"日期不一致：目录为“{folder_date}”，Word 为“{word.document_date}”"
@@ -195,7 +202,8 @@ def scan_data_root(
         key=lambda item: (
             item["folder_date"],
             item["discipline"],
-            int(item["sequence_no"]),
+            int(re.match(r"\d+", item["sequence_no"]).group()),
+            item["sequence_no"],
         )
     )
     return records, unmatched, ignored

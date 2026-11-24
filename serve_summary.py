@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 import logging
+import re
 import sys
 import threading
 from pathlib import Path
@@ -55,12 +57,15 @@ from multidocu_collator.context import AppContext
 from multidocu_collator.flows.build_archive_flow import run_build_archive
 from multidocu_collator.flows.work_contact_flow import (
     HTML_NAME as WORK_CONTACT_HTML_NAME,
+    JSON_NAME as WORK_CONTACT_JSON_NAME,
     build_work_contact_archive,
 )
 from multidocu_collator.flows.summary_server_flow import (
     _open_summary_browser,
     create_summary_server,
 )
+from multidocu_collator.modules.repository import load_dataset
+from multidocu_collator.modules.validation import validate_dataset, validate_summary_html
 
 
 def _bundled_icon_path() -> Path:
@@ -71,7 +76,50 @@ def _bundled_icon_path() -> Path:
     return PROJECT_ROOT / "assets" / "serve_summary.ico"
 
 
-def _run_control_window(context: AppContext) -> None:
+def _existing_hotel_archive_is_valid(context: AppContext) -> bool:
+    try:
+        data = load_dataset(context.json_path)
+        return bool(
+            data is not None
+            and not validate_dataset(data, context.data_root, verify_hashes=False)["errors"]
+            and not validate_summary_html(context.html_path, data)["errors"]
+        )
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return False
+
+
+def _existing_work_contact_archive_is_valid(root: Path) -> bool:
+    try:
+        data = json.loads((root / WORK_CONTACT_JSON_NAME).read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("records"), list):
+            return False
+        records = data["records"]
+        record_ids = [str(item["record_id"]) for item in records]
+        html = (root / WORK_CONTACT_HTML_NAME).read_text(encoding="utf-8")
+        embedded = re.search(
+            r'<script type="application/json" id="summaryData">(.*?)</script>',
+            html, re.DOTALL,
+        )
+        if embedded is None:
+            return False
+        view = json.loads(embedded.group(1))
+        if not isinstance(view, dict):
+            return False
+        return bool(
+            data.get("schema_version") == 1
+            and all(record_ids)
+            and len(record_ids) == len(set(record_ids))
+            and view.get("dataset_revision") == data.get("dataset_revision")
+            and [str(item["record_id"]) for item in view.get("records") or []] == record_ids
+        )
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return False
+
+
+def _run_control_window(
+    context: AppContext, *, hotel_available: bool = True,
+    work_contact_available: bool = True, startup_warnings: tuple[str, ...] = (),
+) -> None:
     from tkinter import Button, Frame, Label, StringVar, Tk
 
     server, url = create_summary_server(context)
@@ -92,7 +140,10 @@ def _run_control_window(context: AppContext) -> None:
                 "无法加载控制窗口图标：%s", icon_path, exc_info=True
             )
 
-    status = StringVar(value="本地汇总服务正在运行")
+    status = StringVar(value=(
+        "归档刷新有异常，已保留可用的汇总；请查看日志"
+        if startup_warnings else "本地汇总服务正在运行"
+    ))
     Label(root, textvariable=status, font=("Microsoft YaHei UI", 14, "bold")).pack(
         pady=(24, 8)
     )
@@ -135,11 +186,13 @@ def _run_control_window(context: AppContext) -> None:
 
     hotel_button = Button(actions, text="酒店需求单", width=15, command=open_hotel)
     hotel_button.pack(side="left", padx=6)
+    if not hotel_available or not context.html_path.is_file():
+        hotel_button.configure(state="disabled")
     work_contact_button = Button(
         actions, text="主体工作联系单", width=15, command=open_work_contact
     )
     work_contact_button.pack(side="left", padx=6)
-    if not context.work_contact_root or not (
+    if not work_contact_available or not context.work_contact_root or not (
         context.work_contact_root / WORK_CONTACT_HTML_NAME
     ).is_file():
         work_contact_button.configure(state="disabled")
@@ -185,16 +238,45 @@ def main() -> int:
     )
     try:
         # 服务启动时先从实际资料目录重建 JSON/HTML，避免打开过期页面。
-        run_build_archive(context)
-        if context.work_contact_root.is_dir():
-            build_work_contact_archive(context.work_contact_root)
-        elif args.work_contact_root:
-            raise FileNotFoundError(f"主体工作联系单目录不存在: {context.work_contact_root}")
-        else:
+        startup_warnings: list[str] = []
+        try:
+            run_build_archive(context)
+            hotel_available = True
+        except Exception:
+            logging.getLogger(__name__).exception("酒店需求单归档刷新失败")
+            hotel_available = _existing_hotel_archive_is_valid(context)
             logging.getLogger(__name__).warning(
-                "主体工作联系单目录不存在，已跳过该工作流: %s", context.work_contact_root
+                "酒店需求单：%s",
+                "使用已校验的既有汇总" if hotel_available else "无可用汇总，入口已禁用",
             )
-        _run_control_window(context)
+            startup_warnings.append("酒店需求单归档刷新失败")
+        try:
+            if context.work_contact_root.is_dir():
+                build_work_contact_archive(context.work_contact_root)
+                work_contact_available = True
+            elif not args.work_contact_root:
+                logging.getLogger(__name__).warning(
+                    "主体工作联系单目录不存在，已跳过该工作流: %s",
+                    context.work_contact_root,
+                )
+                work_contact_available = False
+            else:
+                raise FileNotFoundError(f"主体工作联系单目录不存在: {context.work_contact_root}")
+        except Exception:
+            logging.getLogger(__name__).exception("主体工作联系单归档刷新失败")
+            work_contact_available = _existing_work_contact_archive_is_valid(context.work_contact_root)
+            logging.getLogger(__name__).warning(
+                "主体工作联系单：%s",
+                "使用已校验的既有汇总" if work_contact_available else "无可用汇总，入口已禁用",
+            )
+            startup_warnings.append("主体工作联系单归档刷新失败")
+        if not hotel_available and not work_contact_available:
+            raise RuntimeError("两个归档均无法刷新，且没有可用的既有汇总")
+        _run_control_window(
+            context, hotel_available=hotel_available,
+            work_contact_available=work_contact_available,
+            startup_warnings=tuple(startup_warnings),
+        )
     except Exception as exc:
         logging.getLogger(__name__).exception("本地汇总服务启动失败")
         _show_startup_error(f"本地汇总服务启动失败：{exc}")

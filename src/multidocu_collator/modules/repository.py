@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +35,91 @@ def _record_map(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {str(item["record_id"]): item for item in records}
 
 
+def _resolve_duplicate_ids(
+    root: Path, records: list[dict[str, Any]], previous_records: list[dict[str, Any]]
+) -> None:
+    """Keep the original ID for one record and give each duplicate its own stable ID."""
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        groups[(str(record["discipline"]), str(record["sequence_no"]))].append(record)
+    previous_by_path = {
+        str(record.get("folder_path")): record for record in previous_records
+    }
+    previous_by_code_date: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    previous_by_subject_date: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for record in previous_records:
+        previous_by_code_date[
+            (str(record.get("discipline")), str(record.get("sequence_no")),
+             str(record.get("folder_date")))
+        ].append(record)
+        previous_by_subject_date[
+            (str(record.get("discipline")), str(record.get("folder_date")),
+             str(record.get("subject")))
+        ].append(record)
+
+    def existing_id(record: dict[str, Any]) -> str | None:
+        prior = previous_by_path.get(str(record["folder_path"]))
+        if prior is None:
+            matches = previous_by_code_date[
+                (str(record["discipline"]), str(record["sequence_no"]),
+                 str(record["folder_date"]))
+            ]
+            if len(matches) == 1:
+                prior = matches[0]
+        if prior is None:
+            matches = previous_by_subject_date[
+                (str(record["discipline"]), str(record["folder_date"]),
+                 str(record["subject"]))
+            ]
+            if len(matches) == 1:
+                prior = matches[0]
+        return str(prior["record_id"]) if prior else None
+
+    for (discipline, sequence), group in groups.items():
+        canonical = str(group[0]["record_id"])
+        if len(group) == 1:
+            group[0]["record_id"] = existing_id(group[0]) or canonical
+            continue
+        prior_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for record in group:
+            record["warnings"].append(
+                f"业务编号重复：{discipline}-{sequence}；请核实正式编号"
+            )
+            prior_id = existing_id(record)
+            if prior_id:
+                prior_groups[prior_id].append(record)
+        assigned: set[int] = set()
+        used: set[str] = set()
+        for prior_id, matches in prior_groups.items():
+            # An older failed scan may have saved the same ID twice. Keep it
+            # with the directory created first, then split the other record.
+            keeper = min(
+                matches,
+                key=lambda item: (
+                    (root / str(item["folder_path"])).stat().st_ctime,
+                    str(item["folder_path"]),
+                ),
+            )
+            keeper["record_id"] = prior_id
+            assigned.add(id(keeper))
+            used.add(prior_id)
+        for record in sorted(
+            group,
+            key=lambda item: (
+                (root / str(item["folder_path"])).stat().st_ctime,
+                str(item["folder_path"]),
+            ),
+        ):
+            if id(record) in assigned:
+                continue
+            candidate = canonical if canonical not in used else str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"hotel-requirement-folder:{record['folder_path']}",
+            ))
+            record["record_id"] = candidate
+            used.add(candidate)
+
+
 def build_dataset(
     *,
     root: Path,
@@ -43,6 +130,7 @@ def build_dataset(
 ) -> tuple[dict[str, Any], bool, dict[str, int]]:
     timestamp = now_iso()
     previous_records = (previous or {}).get("records") or []
+    _resolve_duplicate_ids(root, records, previous_records)
     old_map = _record_map(previous_records)
     for record in records:
         old_record = old_map.get(str(record.get("record_id") or "")) or {}

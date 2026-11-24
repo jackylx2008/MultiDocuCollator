@@ -21,6 +21,7 @@ from .document_generator import (
     _set_paragraph_text,
 )
 from .work_contact import BODY_END, _body_text
+from .work_contact_attachment import TITLE
 
 
 def _replace_field(paragraph: ET.Element, value: str) -> None:
@@ -120,6 +121,61 @@ def _replace_body(document: ET.Element, content: str) -> None:
         alignment.set(f"{W}val", "top")
 
 
+def _remove_generated_attachment(document: ET.Element) -> None:
+    body = document.find(f"{W}body")
+    if body is None:
+        return
+    children = list(body)
+    start = next((index for index, child in enumerate(children)
+                  if child.tag == f"{W}p" and _paragraph_text(child).strip() == TITLE), None)
+    if start is None:
+        return
+    for child in children[start:]:
+        if child.tag == f"{W}sectPr":
+            continue
+        body.remove(child)
+
+
+def append_work_contact_attachment(work_contact: Path, attachment_docx: Path) -> Path:
+    """将附件 Word 的纯文字段落合并到联系单 Word 末尾并另起一页。"""
+    with ZipFile(work_contact) as archive:
+        original_xml = archive.read("word/document.xml")
+        document = _parse_preserving_namespaces(original_xml)
+    with ZipFile(attachment_docx) as archive:
+        attachment = _parse_preserving_namespaces(archive.read("word/document.xml"))
+    body = document.find(f"{W}body")
+    attachment_body = attachment.find(f"{W}body")
+    if body is None or attachment_body is None:
+        raise ValueError("联系单或附件 Word 缺少正文")
+    _remove_generated_attachment(document)
+    paragraphs = [copy.deepcopy(child) for child in list(attachment_body)
+                  if child.tag == f"{W}p"]
+    if len(paragraphs) < 3 or _paragraph_text(paragraphs[0]).strip() != TITLE:
+        raise ValueError("附件 Word 缺少预期标题或内容")
+    properties = paragraphs[0].find(f"{W}pPr")
+    if properties is None:
+        properties = ET.Element(f"{W}pPr")
+        paragraphs[0].insert(0, properties)
+    if properties.find(f"{W}pageBreakBefore") is None:
+        ET.SubElement(properties, f"{W}pageBreakBefore")
+    section = body.find(f"{W}sectPr")
+    insertion = list(body).index(section) if section is not None else len(body)
+    for offset, paragraph in enumerate(paragraphs):
+        body.insert(insertion + offset, paragraph)
+    updated_xml = _serialize_preserving_root(document, original_xml)
+    output = work_contact.with_name(f".{work_contact.name}.tmp")
+    try:
+        with ZipFile(work_contact) as source, ZipFile(output, "w", ZIP_DEFLATED) as target:
+            for info in source.infolist():
+                target.writestr(
+                    info, updated_xml if info.filename == "word/document.xml" else source.read(info)
+                )
+        output.replace(work_contact)
+    finally:
+        output.unlink(missing_ok=True)
+    return work_contact
+
+
 def write_work_contact_docx(
     source: Path,
     output: Path,
@@ -134,6 +190,7 @@ def write_work_contact_docx(
     with ZipFile(source) as archive:
         original_xml = archive.read("word/document.xml")
         document = _parse_preserving_namespaces(original_xml)
+        _remove_generated_attachment(document)
         paragraphs = list(document.iter(f"{W}p"))
         _set_paragraph_text(_paragraph_after_label(paragraphs, "资料编号"), document_no)
         _set_paragraph_text(

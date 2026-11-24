@@ -48,7 +48,7 @@ def validate_dataset(
         record_ids.add(record_id)
         key = (str(record.get("discipline") or ""), str(record.get("sequence_no") or ""))
         if key in business_keys:
-            errors.append(f"重复业务编号: {'-'.join(key)}")
+            warnings.append(f"重复业务编号: {'-'.join(key)}")
         business_keys.add(key)
         if "需求内容" not in record:
             errors.append(f"记录缺少“需求内容”字段: {record_id}")

@@ -18,7 +18,7 @@ from ..modules.work_contact_attachment import (
     METADATA_NAME, read_attachment_metadata, write_attachment_docx,
     write_attachment_metadata,
 )
-from ..modules.work_contact_document import write_work_contact_docx
+from ..modules.work_contact_document import append_work_contact_attachment, write_work_contact_docx
 from ..modules.work_contact import TEMPLATE_NAME, TEMPLATE_NAMES
 from .create_record_flow import _clean_component
 from .delete_record_flow import _trash_destination
@@ -162,6 +162,7 @@ def create_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
                 export_pdf_with_word(attachment_word, attachment_pdf)
                 pages = assemble_work_contact_pdf(generated_pdf, pdf, attachment=attachment_pdf)
                 write_attachment_metadata(staging, values["attachment_content"], pages)
+                append_work_contact_attachment(word, attachment_word)
                 attachment_word.unlink()
                 attachment_pdf.unlink()
                 generated_pdf.unlink()
@@ -349,6 +350,7 @@ def update_work_contact(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         generated_pdf.unlink()
         if attachment_word and attachment_pdf:
             write_attachment_metadata(staging, values["attachment_content"], pages)
+            append_work_contact_attachment(new_word, attachment_word)
             attachment_word.unlink()
             attachment_pdf.unlink()
         else:

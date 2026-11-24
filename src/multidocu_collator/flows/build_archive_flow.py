@@ -40,14 +40,18 @@ def run_build_archive(context: AppContext) -> dict[str, Any]:
         ignored_files=ignored,
         previous=previous,
     )
+    dataset_validation = validate_dataset(data, root, verify_hashes=True)
+    if dataset_validation["errors"]:
+        raise ValueError("生成后校验失败：" + "；".join(dataset_validation["errors"]))
     save_dataset(context.json_path, data)
     export_summary_html(data, context.html_path)
-    dataset_validation = validate_dataset(data, root, verify_hashes=True)
     html_validation = validate_summary_html(context.html_path, data)
-    errors = [*dataset_validation["errors"], *html_validation["errors"]]
+    if html_validation["errors"]:
+        raise ValueError("生成后校验失败：" + "；".join(html_validation["errors"]))
     warnings = [*dataset_validation["warnings"], *html_validation["warnings"]]
-    if errors:
-        raise ValueError("生成后校验失败：" + "；".join(errors))
+    for warning in dataset_validation["warnings"]:
+        if warning.startswith("重复业务编号:"):
+            logger.warning(warning)
     logger.info(
         "完成：新增 %d，更新 %d，删除 %d，未变化 %d，含提示 %d",
         summary["added"], summary["updated"], summary["removed"],

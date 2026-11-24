@@ -40,10 +40,10 @@ def _clean_component(value: Any, field: str, *, max_length: int = 120) -> str:
 
 def next_sequence(data: dict[str, Any], discipline: str) -> str:
     numbers = [
-        int(str(record.get("sequence_no") or "0"))
+        int(re.match(r"\d+", str(record.get("sequence_no") or "0")).group())
         for record in data.get("records") or []
         if record.get("discipline") == discipline
-        and str(record.get("sequence_no") or "").isdigit()
+        and re.fullmatch(r"\d+[A-Z]?", str(record.get("sequence_no") or ""))
     ]
     return str((max(numbers) if numbers else 0) + 1).zfill(3)
 
@@ -53,10 +53,12 @@ def _validated_payload(payload: dict[str, Any], data: dict[str, Any]) -> dict[st
     if "-" in discipline:
         raise ValueError("专业不能包含连字符“-”")
     raw_sequence = str(payload.get("sequence_no") or "").strip()
-    sequence = raw_sequence or next_sequence(data, discipline)
-    if not sequence.isdigit() or int(sequence) <= 0:
-        raise ValueError("编号必须是大于 0 的数字")
-    sequence = sequence.zfill(max(3, len(sequence)))
+    sequence = (raw_sequence or next_sequence(data, discipline)).upper()
+    match = re.fullmatch(r"(?P<number>\d+)(?P<suffix>[A-Z]?)", sequence)
+    if not match or int(match.group("number")) <= 0:
+        raise ValueError("编号必须是大于 0 的数字，可附加一个大写字母")
+    number = match.group("number")
+    sequence = number.zfill(max(3, len(number))) + match.group("suffix")
     try:
         document_date = date.fromisoformat(str(payload.get("folder_date") or ""))
     except ValueError as exc:

@@ -4,6 +4,67 @@
 
 优先使用 SSH 方式连接 GitHub。HTTPS 在部分网络环境下可能出现 443 端口连接失败，SSH 通常更稳定，也避免反复处理 HTTPS 凭据问题。
 
+## Windows、MacBook Pro 与群晖共同编辑
+
+本项目有时会在 Windows 台式机和 MacBook Pro 上交替编辑，项目文件同时通过群晖同步。GitHub 是版本历史和最终一致性的基准，群晖用于同步工作区文件，不能代替 Git 提交、拉取和推送。
+
+### 基本约定
+
+- 同一时间只在一台电脑上编辑项目。切换电脑前，先完成保存、测试、提交和推送，并等待群晖同步完成。
+- 切换到另一台电脑后，先等待群晖同步完成，再执行 `git fetch origin` 和 `git status -sb`，确认工作区与远端状态后再继续编辑。
+- 不要让两台电脑同时修改同一文件，否则群晖可能产生冲突副本，Git 也无法判断哪一份是预期版本。
+- Git 提交、分支和标签以 GitHub 远端为准。不要依赖群晖同步 `.git/` 目录来传递 Git 状态；同步中的 `.git/` 不完整或顺序错乱可能损坏仓库状态。
+- Windows 和 macOS 应使用相同的仓库文件名大小写。本文档固定命名为 `docs/GitHub.md`，不要再创建 `docs/github.md`。
+
+### 推荐的电脑切换流程
+
+离开当前电脑前执行：
+
+```powershell
+git status -sb
+git add .
+git commit -m "说明本次改动"
+git push origin main
+```
+
+确认推送成功，并等待群晖完成同步。到另一台电脑后执行：
+
+```powershell
+git fetch origin
+git status -sb
+git pull --rebase origin main
+```
+
+如果群晖已经把最新工作区文件同步过来，但本机 Git 仍显示 `behind`，不要直接删除或覆盖工作区。先确认远端提交确实就是这些同步文件，再用以下命令仅更新本地 Git 提交指针和索引：
+
+```powershell
+git fetch origin
+git reset --mixed origin/main
+git status -sb
+```
+
+`git reset --mixed` 不会改写工作区文件，但会清除暂存区状态。仅在已确认本地文件来自同一个远端最新版本、且没有需要保留的暂存内容时使用；不要使用 `git reset --hard`。
+
+### `.gitignore` 三端一致规则
+
+`.gitignore` 是项目文件，必须由 Git 跟踪，并在 Windows、MacBook Pro 和 GitHub 远端保持一致。操作规则如下：
+
+- 修改 `.gitignore` 后，和代码一样提交并推送；另一台电脑通过拉取获得相同版本。
+- Windows 与 macOS 的通用系统文件规则统一写入项目 `.gitignore`，例如 `.DS_Store`、`._*`、`Thumbs.db` 和 `Desktop.ini`。
+- 只适用于某一台电脑、某个编辑器或个人目录的规则，不要加入项目 `.gitignore`。可写入本机仓库的 `.git/info/exclude`，或配置本机全局忽略文件。
+- 不要通过群晖冲突处理功能分别保留两份 `.gitignore`；发现冲突时应人工合并为一份，然后提交到 GitHub。
+
+检查三端一致性的常用命令：
+
+```powershell
+git fetch origin
+git diff -- .gitignore
+git diff origin/main -- .gitignore
+git status -sb
+```
+
+当 `.gitignore` 没有差异，并且状态显示 `main...origin/main` 且没有 `ahead`、`behind` 时，本机与远端一致。
+
 检查当前远端：
 
 ```powershell
