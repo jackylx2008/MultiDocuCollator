@@ -6,6 +6,7 @@ import json
 import mimetypes
 import platform
 import subprocess
+import time
 import webbrowser
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -49,14 +50,105 @@ from .work_contact_mutation import (
 
 logger = get_logger(__name__)
 MAX_REQUEST_BYTES = 1024 * 1024
+SUMMARY_WINDOW_MARKERS = (
+    "酒店需求工作联系单汇总",
+    "主体工作联系单汇总",
+)
 
 
 def _open_summary_browser(url: str, *, system_name: str | None = None) -> None:
-    """打开汇总页；Windows 下脱离启动器进程树，避免 Code Runner 连带关闭浏览器。"""
-    if (system_name or platform.system()) != "Windows":
-        webbrowser.open(url)
+    if (system_name or platform.system()) == "Windows":
+        _position_summary_window_on_primary_monitor(url)
+        return
+    webbrowser.open(url)
+
+
+def _position_summary_window_on_primary_monitor(url: str, *, timeout: float = 8.0) -> None:
+    """定位本次打开的汇总浏览器窗口到 Windows 主显示器并最大化。"""
+    if platform.system() != "Windows":
         return
 
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [enum_proc, wintypes.LPARAM]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+
+    def matching_windows() -> set[int]:
+        found: set[int] = set()
+
+        @enum_proc
+        def visit(hwnd: int, _lparam: int) -> bool:
+            if user32.IsWindowVisible(hwnd):
+                size = user32.GetWindowTextLengthW(hwnd)
+                title = ctypes.create_unicode_buffer(size + 1)
+                user32.GetWindowTextW(hwnd, title, size + 1)
+                if any(marker in title.value for marker in SUMMARY_WINDOW_MARKERS):
+                    found.add(hwnd)
+            return True
+
+        user32.EnumWindows(visit, 0)
+        return found
+
+    prior_windows = matching_windows()
+    _launch_summary_url(url)
+    deadline = time.monotonic() + timeout
+    target = None
+    while time.monotonic() < deadline:
+        target = next(iter(matching_windows() - prior_windows), None)
+        if target:
+            break
+        time.sleep(0.2)
+    if not target:
+        logger.warning("未能在 %.1f 秒内定位新打开的汇总浏览器窗口", timeout)
+        return
+
+    class RECT(ctypes.Structure):
+        _fields_ = [(name, wintypes.LONG) for name in ("left", "top", "right", "bottom")]
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", wintypes.DWORD)]
+
+    monitor_enum_proc = ctypes.WINFUNCTYPE(
+        wintypes.BOOL, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(RECT), wintypes.LPARAM
+    )
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.MonitorFromWindow.restype = wintypes.HMONITOR
+    user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+    user32.GetMonitorInfoW.restype = wintypes.BOOL
+    user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.c_void_p, monitor_enum_proc, wintypes.LPARAM]
+    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+
+    primary = None
+
+    @monitor_enum_proc
+    def find_primary(monitor: int, _dc: int, _rect: Any, _lparam: int) -> bool:
+        nonlocal primary
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(info)
+        if user32.GetMonitorInfoW(monitor, ctypes.byref(info)) and info.dwFlags & 1:
+            primary = info.rcWork
+            return False
+        return True
+
+    user32.EnumDisplayMonitors(None, None, find_primary, 0)
+    if primary is None:
+        logger.warning("无法读取主显示器工作区，汇总页面保持打开")
+        return
+    user32.ShowWindow(target, 9)  # SW_RESTORE
+    user32.SetWindowPos(target, 0, primary.left, primary.top,
+                        primary.right - primary.left, primary.bottom - primary.top, 0x0040)
+    user32.ShowWindow(target, 3)  # SW_MAXIMIZE
+
+
+def _launch_summary_url(url: str) -> None:
+    """Windows 下脱离启动器进程树，避免 Code Runner 连带关闭浏览器。"""
     creation_flags = (
         getattr(subprocess, "DETACHED_PROCESS", 0)
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
