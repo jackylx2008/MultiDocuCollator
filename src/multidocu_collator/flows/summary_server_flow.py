@@ -40,6 +40,7 @@ from .new_content_draft_flow import (
 )
 from .update_print_status_flow import update_print_statuses
 from .update_record_content_flow import update_record_content
+from .print_pdf_a4_flow import print_all_pdfs_a4, print_pdf_a4
 from .work_contact_flow import HTML_NAME as WORK_HTML_NAME, build_work_contact_archive
 from .work_contact_mutation import (
     create_work_contact,
@@ -262,6 +263,8 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                 "/api/proofread-work-contact",
                 "/api/generate-work-contact",
                 "/api/split-work-contact",
+                "/api/print-pdf-a4",
+                "/api/print-all-pdfs-a4",
             }:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
                 return
@@ -276,6 +279,14 @@ def _handler_class(context: AppContext) -> type[SimpleHTTPRequestHandler]:
                     with RECORD_MUTATION_LOCK:
                         result = run_build_archive(context)
                     logger.info("已从实际资料目录重新扫描并刷新汇总")
+                    self._send_json(HTTPStatus.OK, result)
+                    return
+                if route == "/api/print-pdf-a4":
+                    result = print_pdf_a4(context, payload)
+                    self._send_json(HTTPStatus.OK, result)
+                    return
+                if route == "/api/print-all-pdfs-a4":
+                    result = print_all_pdfs_a4(context)
                     self._send_json(HTTPStatus.OK, result)
                     return
                 if route == "/api/refresh-work-contact":

@@ -134,6 +134,16 @@ def build_dataset(
     old_map = _record_map(previous_records)
     for record in records:
         old_record = old_map.get(str(record.get("record_id") or "")) or {}
+        old_files = {
+            str(item.get("path") or ""): item
+            for item in old_record.get("files") or []
+        }
+        for item in record.get("files") or []:
+            old_file = old_files.get(str(item.get("path") or "")) or {}
+            if (old_file.get("bluebeam_a4") is True
+                    and old_file.get("bluebeam_a4_sha256") == item.get("sha256")):
+                item["bluebeam_a4"] = True
+                item["bluebeam_a4_sha256"] = old_file["bluebeam_a4_sha256"]
         record["需求单已经打印"] = (
             "是" if old_record.get("需求单已经打印") == "是" else "否"
         )

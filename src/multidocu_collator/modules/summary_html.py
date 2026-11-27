@@ -65,6 +65,7 @@ def build_summary_view(data: dict[str, Any]) -> dict[str, Any]:
                     "role_label": role_label,
                     "type_label": type_label,
                     "kind_class": kind_class,
+                    "bluebeam_a4": item.get("bluebeam_a4") is True,
                     "path": str(item.get("path") or ""),
                     "href": _href(str(item.get("path") or "")),
                 }
@@ -200,6 +201,9 @@ HTML_TEMPLATE = r'''<!doctype html>
     .files { display:flex; flex-wrap:wrap; gap:5px; white-space:normal; }
     .file { display:inline-block; max-width:100%; padding:3px 6px; color:#174d7a; border:1px solid #bed3e4; border-radius:5px; background:#f3f9fd; text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .file:hover { color:white; background:var(--blue); }
+    .file.a4-printed { color:#17633a; border-color:#8fc6a4; background:#e8f6ed; }
+    .file.a4-not-printed { color:#805500; border-color:#e6c35a; background:#fff3c4; }
+    .file.a4-printed:hover,.file.a4-not-printed:hover { color:white; background:var(--blue); }
     .file.copied { color:white; border-color:var(--ok); background:var(--ok); }
     .file.dwg { color:#5f368a; border-color:#c9afe2; background:#f7f0fc; font-weight:700; }
     .file.dwg:hover { color:white; background:#69418e; }
@@ -287,6 +291,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     <section class="toolbar">
       <input id="search" type="search" placeholder="搜索专业、编号、日期、致送单位、主题、需求内容……">
       <button id="refreshArchive" class="refresh-button" type="button" title="重新扫描实际资料目录并更新 JSON/HTML">重新扫描刷新</button>
+      <button id="printAllPdfsA4" class="refresh-button" type="button" title="使用 Bluebeam 将酒店需求单 PDF 批量重新打印为 A4">批量转换酒店需求单PDF</button>
       <button id="saveManualStatuses" class="refresh-button print-save-button" type="button" title="保存打印、作废、变更和现场完成状态标记">保存修改内容</button>
       <div class="ai-controls" title="绿色表示 API 可用，红色表示不可用，黄色表示正在检查">
         <span id="aiLight" class="ai-light" role="status" aria-label="本地 AI 等待检查"></span>
@@ -335,7 +340,7 @@ HTML_TEMPLATE = r'''<!doctype html>
   <dialog id="manualEditDialog" class="compact-dialog">
     <div class="dialog-head"><h2 id="manualEditTitle">人工修改</h2></div>
     <div class="dialog-body">
-      <p id="manualEditNote" class="dialog-note">确认后先回填表格；既有条目还需点击“保存内容”才能更新 Word 和 PDF。</p>
+      <p id="manualEditNote" class="dialog-note">保存后将同时更新需求单标题、内容及对应的 Word/PDF 文件。</p>
       <label id="manualSubjectGroup" class="manual-field">主题
         <input id="manualSubjectInput" type="text" maxlength="120" autocomplete="off">
       </label>
@@ -345,7 +350,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     </div>
     <div class="dialog-actions">
       <button id="manualEditCancel" class="dialog-button" type="button">取消</button>
-      <button id="manualEditApply" class="dialog-button primary" type="button">确认修改</button>
+      <button id="manualEditApply" class="dialog-button primary" type="button">保存修改</button>
     </div>
   </dialog>
   <dialog id="subjectActionDialog" class="compact-dialog">
@@ -411,16 +416,16 @@ HTML_TEMPLATE = r'''<!doctype html>
       $('manualSubjectGroup').hidden=contentOnly;$('manualContentGroup').hidden=subjectOnly;$('manualSubjectInput').value=subject;$('manualContentInput').value=content;
       $('manualEditDialog').showModal();setTimeout(()=>$(contentOnly?'manualContentInput':'manualSubjectInput').focus(),0);
     }
-    function showSubjectActions(row,subjectLink,contentEditor){activeSubjectAction={row,subjectLink,contentEditor};$('subjectActionDialog').showModal()}
-    async function saveRecordContent(row,editor,button){
-      if(!isLocalService()){alert('更新 Word/PDF 需要通过 serve_summary.py 打开本页面。');return}
-      const content=editor.value.trim();if(!content){alert('需求内容不能为空');return}
-      const subject=String(row.subject||'').trim();if(!subject){alert('主题不能为空');return}
-      button.disabled=true;button.textContent='正在更新 Word/PDF…';
+    async function saveRecordContent(row,subject,content,button){
+      if(!isLocalService()){alert('更新 Word/PDF 需要通过 serve_summary.py 打开本页面。');return false}
+      content=String(content||'').trim();subject=String(subject||'').trim();if(!content){alert('需求内容不能为空');return false}
+      if(!subject){alert('主题不能为空');return false}
+      if(button){button.disabled=true;button.textContent='正在更新 Word/PDF…'}
       try{
         const response=await fetch('/api/update-record-content',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,record_id:row.record_id,subject,requirement_content:content})});
         const result=await response.json();if(!response.ok)throw new Error(result.error||'更新失败');location.reload();
-      }catch(error){alert(`更新主题或需求内容失败：${errorMessage(error)}`);button.disabled=false;button.textContent='保存内容'}
+        return true;
+      }catch(error){alert(`更新主题或需求内容失败：${errorMessage(error)}`);if(button){button.disabled=false;button.textContent='保存内容'}return false}
     }
     async function openDirectory(event,row){
       if(!isLocalService())return;
@@ -442,6 +447,19 @@ HTML_TEMPLATE = r'''<!doctype html>
         anchor.textContent='已复制';anchor.classList.add('copied');
         setTimeout(()=>{anchor.textContent=original;anchor.classList.remove('copied')},1200);
       }catch(error){alert(`复制文件失败：${errorMessage(error)}`)}
+    }
+    async function printPdfA4(file,anchor){
+      if(!isLocalService()){alert('A4 打印需要通过 serve_summary.py 打开本页面。');return}
+      anchor.classList.add('printing');
+      try{const response=await fetch('/api/print-pdf-a4',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataset_revision:data.dataset_revision,path:file.path})});const result=await response.json();if(!response.ok)throw new Error(result.error||'打印失败');location.reload()}
+      catch(error){anchor.classList.remove('printing');alert(`Bluebeam A4 打印失败：${errorMessage(error)}`)}
+    }
+    async function printAllPdfsA4(button){
+      if(!isLocalService()){alert('批量 A4 打印需要通过 serve_summary.py 打开本页面。');return}
+      if(!confirm('将使用 Bluebeam 批量重新打印酒店需求单 PDF；每个原件会备份为 .pdf.bak（同名备份会覆盖）。可能需要较长时间，是否继续？'))return;
+      button.disabled=true;button.textContent='正在批量打印…';
+      try{const response=await fetch('/api/print-all-pdfs-a4',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const result=await response.json();if(!response.ok)throw new Error(result.error||'批量打印失败');alert(`批量处理完成：${result.total} 个 PDF`);location.reload()}
+      catch(error){alert(`批量打印失败：${errorMessage(error)}`);button.disabled=false;button.textContent='批量转换酒店需求单PDF'}
     }
     async function refreshArchive(button){
       if(!isLocalService()){alert('重新扫描需要通过 serve_summary.py 打开本页面。');return}
@@ -490,11 +508,11 @@ HTML_TEMPLATE = r'''<!doctype html>
       rows.forEach((row,index)=>{
         const tr=node('tr');if(row.void_status==='是')tr.classList.add('void-row');
         [index+1,row.discipline,row.sequence_no,row.folder_date,row.recipient||'—'].forEach(value=>tr.append(node('td',value)));
-        const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='左键选择打开目录或修改主题';subjectLink.addEventListener('click',event=>{event.preventDefault();showSubjectActions(row,subjectLink,contentInput)});subjectCell.append(subjectLink);tr.append(subjectCell);
-        const content=node('td'),contentEditor=node('div',undefined,'content-editor'),contentInput=node('textarea');contentInput.value=row.requirement_content;contentInput.readOnly=true;contentInput.title='点击弹窗修改需求内容';contentInput.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求内容`);contentInput.addEventListener('click',()=>openManualEditor({mode:'content',subject:row.subject,content:contentInput.value,apply:values=>{row.requirement_content=values.content;contentInput.value=values.content}}));
-        const contentActions=node('div',undefined,'content-actions'),aiButton=node('button','AI 公文勘误','content-button ai-button'),editButton=node('button','修改','content-button'),contentSave=node('button','保存内容','content-button content-save-button');aiButton.type='button';editButton.type='button';contentSave.type='button';aiButton.disabled=aiAvailable===false;aiButton.addEventListener('click',()=>proofreadContent(row,contentInput,aiButton));editButton.addEventListener('click',()=>openManualEditor({mode:'both',subject:row.subject,content:contentInput.value,apply:values=>{row.subject=values.subject;row.requirement_content=values.content;subjectLink.textContent=values.subject;contentInput.value=values.content}}));contentSave.addEventListener('click',()=>saveRecordContent(row,contentInput,contentSave));contentActions.append(aiButton,editButton,contentSave);contentEditor.append(contentInput,contentActions);content.append(contentEditor);tr.append(content);
+        const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='点击弹窗修改标题和需求内容';subjectLink.addEventListener('click',event=>{event.preventDefault();openManualEditor({mode:'both',subject:row.subject,content:row.requirement_content,apply:values=>saveRecordContent(row,values.subject,values.content)});});subjectCell.append(subjectLink);tr.append(subjectCell);
+        const content=node('td'),contentEditor=node('div',undefined,'content-editor'),contentInput=node('textarea');contentInput.value=row.requirement_content;contentInput.readOnly=true;contentInput.title='点击弹窗修改标题和需求内容';contentInput.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求内容`);contentInput.addEventListener('click',()=>openManualEditor({mode:'both',subject:row.subject,content:contentInput.value,apply:values=>saveRecordContent(row,values.subject,values.content)}));
+        const contentActions=node('div',undefined,'content-actions'),aiButton=node('button','AI 公文勘误','content-button ai-button'),editButton=node('button','修改','content-button'),contentSave=node('button','保存内容','content-button content-save-button');aiButton.type='button';editButton.type='button';contentSave.type='button';aiButton.disabled=aiAvailable===false;aiButton.addEventListener('click',()=>proofreadContent(row,contentInput,aiButton));editButton.addEventListener('click',()=>openManualEditor({mode:'both',subject:row.subject,content:contentInput.value,apply:values=>saveRecordContent(row,values.subject,values.content)}));contentSave.addEventListener('click',()=>saveRecordContent(row,row.subject,contentInput.value,contentSave));contentActions.append(aiButton,editButton,contentSave);contentEditor.append(contentInput,contentActions);content.append(contentEditor);tr.append(content);
         const fileCell=node('td'),files=node('div',undefined,'files');
-        row.files.forEach(file=>{const a=node('a',file.role_label,`file${file.kind_class?' '+file.kind_class:''}`);a.href=file.href;a.title=`${file.name}\n文件类型：${file.type_label}\n左键复制，可在其他位置粘贴`;a.addEventListener('click',event=>copyFile(event,file,a));files.append(a)});fileCell.append(files);tr.append(fileCell);
+        row.files.forEach(file=>{const a=node('a',file.role_label,`file${file.kind_class?' '+file.kind_class:''}${file.type_label==='PDF'?(file.bluebeam_a4?' a4-printed':' a4-not-printed'):''}`);a.href=file.href;a.title=`${file.name}\n文件类型：${file.type_label}${file.type_label==='PDF'?`\nA4打印：${file.bluebeam_a4?'已打印':'未打印'}\n右键选择“打印成A4”`:''}\n左键复制，可在其他位置粘贴`;a.addEventListener('click',event=>copyFile(event,file,a));if(file.type_label==='PDF')a.addEventListener('contextmenu',event=>{event.preventDefault();if(!confirm(`使用 Bluebeam 将“${file.name}”重新打印成 A4 并替换原文件吗？原件将备份为 .pdf.bak。`))return;printPdfA4(file,a)});files.append(a)});fileCell.append(files);tr.append(fileCell);
         const printCell=node('td'),printSelect=node('select',undefined,'print-select');
         ['否','是'].forEach(value=>{const option=node('option',value);option.value=value;printSelect.append(option)});printSelect.value=row.print_status;printSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求单已经打印`);printSelect.addEventListener('change',()=>{row.print_status=printSelect.value});printCell.append(printSelect);tr.append(printCell);
         const changeCell=node('td'),changeSelect=node('select',undefined,'print-select');['否','是'].forEach(value=>{const option=node('option',value);option.value=value;changeSelect.append(option)});changeSelect.value=row.change_required;changeSelect.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 是否需要变更`);changeSelect.addEventListener('change',()=>{row.change_required=changeSelect.value});changeCell.append(changeSelect);tr.append(changeCell);
@@ -557,13 +575,13 @@ HTML_TEMPLATE = r'''<!doctype html>
       return tr;
     }
     $('refreshArchive').addEventListener('click',event=>refreshArchive(event.currentTarget));
+    $('printAllPdfsA4').addEventListener('click',event=>printAllPdfsA4(event.currentTarget));
     $('saveManualStatuses').addEventListener('click',event=>saveManualStatuses(event.currentTarget));
     $('checkLocalAi').addEventListener('click',checkLocalAi);
     $('manualEditCancel').addEventListener('click',()=>{$('manualEditDialog').close();activeManualEdit=null});
-    $('manualEditApply').addEventListener('click',()=>{if(!activeManualEdit)return;const subject=$('manualSubjectInput').value.trim(),content=$('manualContentInput').value.trim();if(activeManualEdit.mode!=='content'&&!subject){alert('主题不能为空');return}if(activeManualEdit.mode!=='subject'&&!content){alert('需求内容不能为空');return}if(subject.length>120){alert('主题不能超过 120 个字符');return}if(content.length>4000){alert('需求内容不能超过 4000 个字符');return}const values={subject,content};activeManualEdit.apply(values);$('manualEditDialog').close();activeManualEdit=null});
+    $('manualEditApply').addEventListener('click',async()=>{if(!activeManualEdit)return;const subject=$('manualSubjectInput').value.trim(),content=$('manualContentInput').value.trim();if(activeManualEdit.mode!=='content'&&!subject){alert('主题不能为空');return}if(activeManualEdit.mode!=='subject'&&!content){alert('需求内容不能为空');return}if(subject.length>120){alert('主题不能超过 120 个字符');return}if(content.length>4000){alert('需求内容不能超过 4000 个字符');return}const values={subject,content};const saveButton=$('manualEditApply');saveButton.disabled=true;saveButton.textContent='正在保存…';try{const saved=await activeManualEdit.apply(values);if(saved===false)return;$('manualEditDialog').close();activeManualEdit=null}catch(error){alert(`保存失败：${errorMessage(error)}`)}finally{saveButton.disabled=false;saveButton.textContent='保存修改'}});
     $('subjectActionCancel').addEventListener('click',()=>{$('subjectActionDialog').close();activeSubjectAction=null});
     $('subjectOpenDirectory').addEventListener('click',()=>{const action=activeSubjectAction;$('subjectActionDialog').close();activeSubjectAction=null;if(!action)return;if(isLocalService())openDirectory({preventDefault(){}},action.row);else location.href=action.row.folder_href});
-    $('subjectModify').addEventListener('click',()=>{const action=activeSubjectAction;$('subjectActionDialog').close();activeSubjectAction=null;if(!action)return;openManualEditor({mode:'subject',subject:action.row.subject,content:action.contentEditor.value,apply:values=>{action.row.subject=values.subject;action.subjectLink.textContent=values.subject}})});
     $('aiCancel').addEventListener('click',()=>{$('aiDialog').close();activeProofread=null});
     $('aiManualEdit').addEventListener('click',()=>{const revised=$('aiRevisedContent');revised.textContent=revised.textContent;revised.contentEditable='true';revised.focus();$('aiDialogNote').textContent='已进入手动修改模式；黄底对比标记已清除，修改完成后点击“接受”。'});
     $('aiAccept').addEventListener('click',()=>{const revised=$('aiRevisedContent').textContent.trim();if(!activeProofread||!revised){alert('修订内容不能为空');return}if(revised.length>4000){alert('修订内容不能超过 4000 个字符');return}if(activeProofread.row)activeProofread.row.requirement_content=revised;activeProofread.editor.value=revised;if(activeProofread.onAccept)activeProofread.onAccept(revised);$('aiDialog').close();activeProofread=null});
