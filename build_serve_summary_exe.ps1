@@ -49,7 +49,7 @@ $workspaceExe = Join-Path $projectRoot "酒店需求工作联系单汇总v2.exe"
 try {
     Copy-Item -LiteralPath $output -Destination $workspaceExe -Force -ErrorAction Stop
 } catch {
-    throw "EXE 已构建到 $output，但工作区 App 正在运行，无法替换 $workspaceExe。请先退出所有“酒店需求工作联系单汇总v2”窗口，再重新运行本脚本。"
+    throw "EXE 已构建到 $output，但工作区 App 正在运行，无法替换 $workspaceExe。请先退出 App，再重新运行本脚本。"
 }
 if ((Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash -ne
     (Get-FileHash -LiteralPath $workspaceExe -Algorithm SHA256).Hash) {
