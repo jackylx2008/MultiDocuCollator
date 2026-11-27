@@ -129,6 +129,10 @@ def print_all_pdfs_a4(context: AppContext) -> dict[str, Any]:
         for item in record.get("files") or []
         if item.get("role") == "issued_pdf"
         and str(item.get("extension") or "").lower() == ".pdf"
+        and not (
+            item.get("bluebeam_a4") is True
+            and item.get("bluebeam_a4_sha256") == item.get("sha256")
+        )
     ]
     results = []
     for relative in paths:
