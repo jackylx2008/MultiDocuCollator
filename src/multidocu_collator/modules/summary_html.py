@@ -354,16 +354,6 @@ HTML_TEMPLATE = r'''<!doctype html>
       <button id="manualEditApply" class="dialog-button primary" type="button">保存修改</button>
     </div>
   </dialog>
-  <dialog id="subjectActionDialog" class="compact-dialog">
-    <div class="dialog-head"><h2>主题操作</h2></div>
-    <div class="dialog-body subject-choice">
-      <button id="subjectOpenDirectory" class="dialog-button" type="button">打开资料目录</button>
-      <button id="subjectModify" class="dialog-button primary" type="button">修改主题</button>
-    </div>
-    <div class="dialog-actions">
-      <button id="subjectActionCancel" class="dialog-button" type="button">取消</button>
-    </div>
-  </dialog>
   <dialog id="printConfirmDialog" class="compact-dialog">
     <div class="dialog-head"><h2 id="printConfirmTitle">打印成A4</h2></div>
     <div class="dialog-body"><p id="printConfirmMessage" class="dialog-note confirm-message"></p></div>
@@ -394,7 +384,7 @@ HTML_TEMPLATE = r'''<!doctype html>
     function renderComparison(element,segments,fallback){
       element.replaceChildren();const parts=Array.isArray(segments)&&segments.length?segments:[{text:fallback,changed:false}];parts.forEach(part=>element.append(node('span',part.text,part.changed?'ai-change':undefined)));
     }
-    let aiAvailable=false,activeProofread=null,activeManualEdit=null,activeSubjectAction=null,activePrintConfirmation=null;
+    let aiAvailable=false,activeProofread=null,activeManualEdit=null,activePrintConfirmation=null;
     function applyAiStatus(result){
       aiAvailable=Boolean(result.available);$('aiState').textContent=result.message;$('aiState').title=`API：http://127.0.0.1:8080/v1 · 模型：${result.model}`;$('aiLight').className=`ai-light${aiAvailable?' running':''}`;$('aiLight').setAttribute('aria-label',aiAvailable?'本地 AI API 可用':'本地 AI API 不可用');document.querySelectorAll('.ai-button').forEach(button=>{button.disabled=!aiAvailable});
     }
@@ -532,7 +522,7 @@ HTML_TEMPLATE = r'''<!doctype html>
       rows.forEach((row,index)=>{
         const tr=node('tr');if(row.void_status==='是')tr.classList.add('void-row');
         [index+1,row.discipline,row.sequence_no,row.folder_date,row.recipient||'—'].forEach(value=>tr.append(node('td',value)));
-        const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='点击弹窗修改标题和需求内容';subjectLink.addEventListener('click',event=>{event.preventDefault();openManualEditor({mode:'both',subject:row.subject,content:row.requirement_content,apply:values=>saveRecordContent(row,values.subject,values.content)});});subjectCell.append(subjectLink);tr.append(subjectCell);
+        const subjectCell=node('td'),subjectLink=node('a',row.subject,'subject-link');subjectLink.href=row.folder_href;subjectLink.title='点击打开对应资料目录';subjectLink.addEventListener('click',event=>openDirectory(event,row));subjectCell.append(subjectLink);tr.append(subjectCell);
         const content=node('td'),contentEditor=node('div',undefined,'content-editor'),contentInput=node('textarea');contentInput.value=row.requirement_content;contentInput.readOnly=true;contentInput.title='点击弹窗修改标题和需求内容';contentInput.setAttribute('aria-label',`${row.discipline}-${row.sequence_no} 需求内容`);contentInput.addEventListener('click',()=>openManualEditor({mode:'both',subject:row.subject,content:contentInput.value,apply:values=>saveRecordContent(row,values.subject,values.content)}));
         const contentActions=node('div',undefined,'content-actions'),aiButton=node('button','AI 公文勘误','content-button ai-button'),editButton=node('button','修改','content-button'),contentSave=node('button','保存内容','content-button content-save-button');aiButton.type='button';editButton.type='button';contentSave.type='button';aiButton.disabled=aiAvailable===false;aiButton.addEventListener('click',()=>proofreadContent(row,contentInput,aiButton));editButton.addEventListener('click',()=>openManualEditor({mode:'both',subject:row.subject,content:contentInput.value,apply:values=>saveRecordContent(row,values.subject,values.content)}));contentSave.addEventListener('click',()=>saveRecordContent(row,row.subject,contentInput.value,contentSave));contentActions.append(aiButton,editButton,contentSave);contentEditor.append(contentInput,contentActions);content.append(contentEditor);tr.append(content);
         const fileCell=node('td'),files=node('div',undefined,'files');
@@ -576,8 +566,8 @@ HTML_TEMPLATE = r'''<!doctype html>
       const sequence=field('input','sequence_no','自动','text');sequence.inputMode='numeric';const sequenceCell=node('td');sequenceCell.append(sequence);tr.append(sequenceCell);
       const dateInput=field('input','folder_date','', 'date');dateInput.value=localDate();const dateCell=node('td');dateCell.append(dateInput);tr.append(dateCell);
       const recipient=field('textarea','recipient','致送单位');recipient.value='中国建筑第二工程局有限公司国家会议中心二期项目配套部分项目部';const recipientCell=node('td');recipientCell.append(recipient);tr.append(recipientCell);
-      const subject=field('textarea','subject','点击弹窗填写主题');subject.value='关于   的事宜';subject.readOnly=true;subject.title='点击弹窗填写主题';subject.addEventListener('click',()=>openManualEditor({mode:'subject',subject:subject.value,content:content.value,apply:values=>{subject.value=values.subject}}));const subjectCell=node('td');subjectCell.append(subject);tr.append(subjectCell);
-      const content=field('textarea','requirement_content','点击弹窗填写需求内容'),draftAiButton=node('button','AI 公文勘误','draft-button draft-ai-button ai-button'),draftButton=node('button','临时保存内容','draft-button'),draftNote=node('span','AI 修订或临时保存都不会生成 Word/PDF','draft-note'),draftActions=node('div',undefined,'draft-actions');content.readOnly=true;content.title='点击弹窗填写需求内容';content.addEventListener('click',()=>openManualEditor({mode:'content',subject:subject.value,content:content.value,apply:values=>{content.value=values.content}}));draftAiButton.type='button';draftAiButton.disabled=!aiAvailable;draftAiButton.addEventListener('click',()=>proofreadContent(null,content,draftAiButton,()=>{draftNote.textContent='AI 修订稿已回填；如需保留，请点击“临时保存内容”'}));draftButton.type='button';draftButton.title='保存到项目本地草稿，重启服务后仍可恢复';draftButton.addEventListener('click',()=>saveNewContentDraft(content,draftButton,draftNote));draftActions.append(draftAiButton,draftButton);const contentCell=node('td');contentCell.append(content,draftActions,draftNote);tr.append(contentCell);loadNewContentDraft(content,draftNote);
+      const subject=field('textarea','subject','点击弹窗填写主题和需求内容');subject.value='关于   的事宜';subject.readOnly=true;subject.title='点击弹窗填写主题和需求内容';subject.addEventListener('click',()=>openManualEditor({mode:'both',subject:subject.value,content:content.value,apply:values=>{subject.value=values.subject;content.value=values.content}}));const subjectCell=node('td');subjectCell.append(subject);tr.append(subjectCell);
+      const content=field('textarea','requirement_content','点击弹窗填写主题和需求内容'),draftAiButton=node('button','AI 公文勘误','draft-button draft-ai-button ai-button'),draftButton=node('button','临时保存内容','draft-button'),draftNote=node('span','AI 修订或临时保存都不会生成 Word/PDF','draft-note'),draftActions=node('div',undefined,'draft-actions');content.readOnly=true;content.title='点击弹窗填写主题和需求内容';content.addEventListener('click',()=>openManualEditor({mode:'both',subject:subject.value,content:content.value,apply:values=>{subject.value=values.subject;content.value=values.content}}));draftAiButton.type='button';draftAiButton.disabled=!aiAvailable;draftAiButton.addEventListener('click',()=>proofreadContent(null,content,draftAiButton,()=>{draftNote.textContent='AI 修订稿已回填；如需保留，请点击“临时保存内容”'}));draftButton.type='button';draftButton.title='保存到项目本地草稿，重启服务后仍可恢复';draftButton.addEventListener('click',()=>saveNewContentDraft(content,draftButton,draftNote));draftActions.append(draftAiButton,draftButton);const contentCell=node('td');contentCell.append(content,draftActions,draftNote);tr.append(contentCell);loadNewContentDraft(content,draftNote);
       const fileCell=node('td','保存后自动创建目录、DOCX 和 PDF');tr.append(fileCell);
       tr.append(node('td','否'));
       tr.append(node('td','否'));
@@ -607,8 +597,6 @@ HTML_TEMPLATE = r'''<!doctype html>
     $('checkLocalAi').addEventListener('click',checkLocalAi);
     $('manualEditCancel').addEventListener('click',()=>{$('manualEditDialog').close();activeManualEdit=null});
     $('manualEditApply').addEventListener('click',async()=>{if(!activeManualEdit)return;const subject=$('manualSubjectInput').value.trim(),content=$('manualContentInput').value.trim();if(activeManualEdit.mode!=='content'&&!subject){alert('主题不能为空');return}if(activeManualEdit.mode!=='subject'&&!content){alert('需求内容不能为空');return}if(subject.length>120){alert('主题不能超过 120 个字符');return}if(content.length>4000){alert('需求内容不能超过 4000 个字符');return}const values={subject,content};const saveButton=$('manualEditApply');saveButton.disabled=true;saveButton.textContent='正在保存…';try{const saved=await activeManualEdit.apply(values);if(saved===false)return;$('manualEditDialog').close();activeManualEdit=null}catch(error){alert(`保存失败：${errorMessage(error)}`)}finally{saveButton.disabled=false;saveButton.textContent='保存修改'}});
-    $('subjectActionCancel').addEventListener('click',()=>{$('subjectActionDialog').close();activeSubjectAction=null});
-    $('subjectOpenDirectory').addEventListener('click',()=>{const action=activeSubjectAction;$('subjectActionDialog').close();activeSubjectAction=null;if(!action)return;if(isLocalService())openDirectory({preventDefault(){}},action.row);else location.href=action.row.folder_href});
     $('aiCancel').addEventListener('click',()=>{$('aiDialog').close();activeProofread=null});
     $('aiManualEdit').addEventListener('click',()=>{const revised=$('aiRevisedContent');revised.textContent=revised.textContent;revised.contentEditable='true';revised.focus();$('aiDialogNote').textContent='已进入手动修改模式；黄底对比标记已清除，修改完成后点击“接受”。'});
     $('aiAccept').addEventListener('click',()=>{const revised=$('aiRevisedContent').textContent.trim();if(!activeProofread||!revised){alert('修订内容不能为空');return}if(revised.length>4000){alert('修订内容不能超过 4000 个字符');return}if(activeProofread.row)activeProofread.row.requirement_content=revised;activeProofread.editor.value=revised;if(activeProofread.onAccept)activeProofread.onAccept(revised);$('aiDialog').close();activeProofread=null});
