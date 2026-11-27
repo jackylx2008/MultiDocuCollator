@@ -292,7 +292,8 @@ PDF 文件标签右键提供“打印成A4”，可单独重印资料中的 PDF�
 只处理酒店需求单本身的 PDF，不处理扫描件、附图或附件。转换通过本机 Bluebeam Revu eXtreme
 脚本引擎重印为 A4 PostScript，再转成 PDF；原 PDF 备份为同目录 `.pdf.bak`（同名备份会覆盖）。
 JSON 按文件记录 A4 转换状态和哈希，HTML 用绿色表示已转换、橙黄色表示未转换；PDF 后续被修改时，
-重新扫描会清除过期状态。运行转换需要 Revu 20 ScriptEngine 和 `ps2pdf`（Ghostscript/TeX Live）。
+重新扫描会清除过期状态。单个文件转换只更新对应 JSON 文件项，不会对每份 PDF 重扫整个资料目录。
+运行转换需要 Revu 20 ScriptEngine 和 `ps2pdf`（Ghostscript/TeX Live）。
 
 “需求单已经打印”列可人工选择“是”或“否”（旧记录默认“否”），列标题下可按
 “是”或“否”筛选。“状态 / 核对”列在系统自动状态下方增加“有效/作废”人工选择；

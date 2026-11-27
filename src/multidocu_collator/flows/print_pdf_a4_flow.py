@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +16,8 @@ from ..context import AppContext
 from ..modules.desktop import resolve_relative_file
 from ..modules.file_utils import sha256_file
 from ..modules.pdf_exporter import validate_pdf
-from ..modules.repository import load_dataset, save_dataset
+from ..modules.repository import load_dataset, now_iso, save_dataset
 from ..modules.summary_html import export_summary_html
-from .build_archive_flow import run_build_archive
 from .mutation_lock import RECORD_MUTATION_LOCK
 
 
@@ -105,15 +105,27 @@ def print_pdf_a4(context: AppContext, payload: dict[str, Any]) -> dict[str, Any]
             backup = source.with_suffix(source.suffix + ".bak")
             shutil.copy2(source, backup)
             staged.replace(source)
-        run_build_archive(context)
         current = load_dataset(context.json_path)
         if current is None:
-            raise RuntimeError("打印完成但无法读取更新后的 JSON")
+            raise RuntimeError("打印完成但无法读取 JSON")
+        stat = source.stat()
+        current_hash = sha256_file(source)
+        matched = False
         for record in current.get("records") or []:
             for item in record.get("files") or []:
                 if item.get("path") == relative:
+                    item["size"] = stat.st_size
+                    item["sha256"] = current_hash
+                    item["modified_at"] = datetime.fromtimestamp(
+                        stat.st_mtime
+                    ).astimezone().isoformat(timespec="seconds")
                     item["bluebeam_a4"] = True
-                    item["bluebeam_a4_sha256"] = item.get("sha256") or sha256_file(source)
+                    item["bluebeam_a4_sha256"] = current_hash
+                    matched = True
+        if not matched:
+            raise ValueError("JSON 中找不到待打印的 PDF 文件项")
+        current["dataset_revision"] = int(current.get("dataset_revision") or 0) + 1
+        current["updated_at"] = now_iso()
         save_dataset(context.json_path, current)
         export_summary_html(current, context.html_path)
         return {"ok": True, "path": relative, "dataset_revision": current.get("dataset_revision")}
