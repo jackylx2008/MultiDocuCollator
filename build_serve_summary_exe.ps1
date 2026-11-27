@@ -45,6 +45,16 @@ $output = Join-Path $deliveryDir "$appName.exe"
 if (-not (Test-Path -LiteralPath $output)) {
     throw "构建完成但未找到输出文件: $output"
 }
+$workspaceExe = Join-Path $projectRoot "酒店需求工作联系单汇总v2.exe"
+try {
+    Copy-Item -LiteralPath $output -Destination $workspaceExe -Force -ErrorAction Stop
+} catch {
+    throw "EXE 已构建到 $output，但工作区 App 正在运行，无法替换 $workspaceExe。请先退出所有“酒店需求工作联系单汇总v2”窗口，再重新运行本脚本。"
+}
+if ((Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash -ne
+    (Get-FileHash -LiteralPath $workspaceExe -Algorithm SHA256).Hash) {
+    throw "工作区启动文件复制校验失败: $workspaceExe"
+}
 
 Copy-Item -LiteralPath (Join-Path $projectRoot "config.yaml") -Destination $deliveryDir -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot "common.env.example") -Destination $deliveryDir -Force
@@ -56,3 +66,4 @@ foreach ($envName in @(".env", "common.env")) {
 }
 
 Write-Host "构建完成: $output"
+Write-Host "工作区启动文件已更新: $workspaceExe"
