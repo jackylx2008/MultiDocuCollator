@@ -15,4 +15,5 @@ output/
 build/
 *.spec
 *.exe
+*.exe.*.bak
 docs/*
